@@ -5,3 +5,22 @@
 # Local content excluded from this repository
 cherry_quant_wikidocs/
 **/cherry_quant_wikidocs/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Local environment files
+.env
+.env.local
+
+# Airflow / dbt local state
+.airflow/
+logs/
+target/
+dbt_packages/
+
+# Local data volumes
+.data/

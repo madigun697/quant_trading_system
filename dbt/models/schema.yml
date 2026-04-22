@@ -1,0 +1,35 @@
+version: 2
+
+models:
+  - name: stg_security_master
+    columns:
+      - name: symbol
+        tests: [not_null]
+
+  - name: stg_daily_prices
+    columns:
+      - name: symbol
+        tests: [not_null]
+      - name: trade_date
+        tests: [not_null]
+
+  - name: stg_filing_metadata
+    columns:
+      - name: stable_id_or_cik
+        tests: [not_null]
+      - name: accession_number
+        tests: [not_null]
+
+  - name: mart_value_momentum_inputs
+    columns:
+      - name: symbol
+        tests: [not_null]
+      - name: trade_date
+        tests: [not_null]
+
+  - name: mart_quality_lowvol_inputs
+    columns:
+      - name: symbol
+        tests: [not_null]
+      - name: trade_date
+        tests: [not_null]

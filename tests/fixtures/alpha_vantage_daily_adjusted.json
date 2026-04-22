@@ -1,0 +1,28 @@
+{
+  "Meta Data": {
+    "1. Information": "Daily Time Series with Splits and Dividend Events",
+    "2. Symbol": "IBM"
+  },
+  "Time Series (Daily)": {
+    "2025-01-15": {
+      "1. open": "220.00",
+      "2. high": "225.00",
+      "3. low": "219.00",
+      "4. close": "224.00",
+      "5. adjusted close": "223.50",
+      "6. volume": "5000000",
+      "7. dividend amount": "0.0000",
+      "8. split coefficient": "1.0"
+    },
+    "2025-01-14": {
+      "1. open": "218.00",
+      "2. high": "221.00",
+      "3. low": "217.00",
+      "4. close": "220.00",
+      "5. adjusted close": "219.50",
+      "6. volume": "4500000",
+      "7. dividend amount": "0.5000",
+      "8. split coefficient": "1.0"
+    }
+  }
+}

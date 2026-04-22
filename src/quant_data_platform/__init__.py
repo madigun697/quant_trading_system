@@ -1,0 +1,2 @@
+"""Quant data platform prototype."""
+

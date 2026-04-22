@@ -1,0 +1,12 @@
+quant_data_platform:
+  target: dev
+  outputs:
+    dev:
+      type: postgres
+      host: "{{ env_var('POSTGRES_HOST', 'postgres') }}"
+      user: "{{ env_var('POSTGRES_USER', 'quant') }}"
+      password: "{{ env_var('POSTGRES_PASSWORD', 'quant') }}"
+      port: "{{ env_var('POSTGRES_PORT', '5432') | int }}"
+      dbname: "{{ env_var('POSTGRES_DB', 'quant') }}"
+      schema: stg
+      threads: 4

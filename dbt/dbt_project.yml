@@ -1,0 +1,24 @@
+name: quant_data_platform
+version: 1.0.0
+config-version: 2
+
+profile: quant_data_platform
+
+model-paths: ["models"]
+seed-paths: ["seeds"]
+test-paths: ["tests"]
+target-path: "target"
+clean-targets: ["target", "dbt_packages"]
+
+models:
+  quant_data_platform:
+    +materialized: view
+    staging:
+      +schema: stg
+      +tags: ["stg"]
+    intermediate:
+      +schema: stg
+      +tags: ["int"]
+    marts:
+      +schema: mart
+      +tags: ["mart"]

@@ -1,0 +1,19 @@
+version: 2
+
+sources:
+  - name: raw
+    schema: raw
+    tables:
+      - name: alpha_vantage_listing_status
+      - name: alpha_vantage_overview
+      - name: alpha_vantage_daily_prices
+      - name: alpha_vantage_corporate_actions
+      - name: sec_filing_metadata
+      - name: sec_companyfacts_facts
+      - name: fred_series_observations
+
+  - name: meta
+    schema: meta
+    tables:
+      - name: universe_members
+      - name: fred_series_config

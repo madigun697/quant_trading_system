@@ -1,0 +1,19 @@
+{
+  "cik": "51143",
+  "name": "International Business Machines Corporation",
+  "tickers": ["IBM"],
+  "exchanges": ["NYSE"],
+  "sic": "7370",
+  "sicDescription": "Services-Computer Programming, Data Processing, Etc.",
+  "filings": {
+    "recent": {
+      "accessionNumber": ["0000051143-24-000012"],
+      "filingDate": ["2024-02-28"],
+      "acceptanceDateTime": ["2024-02-28T16:30:00Z"],
+      "reportDate": ["2023-12-31"],
+      "form": ["10-K"],
+      "primaryDocument": ["ibm-20231231x10k.htm"],
+      "isXBRL": [1]
+    }
+  }
+}
