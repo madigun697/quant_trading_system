@@ -10,7 +10,13 @@ from quant_data_platform.clients.alpha_vantage import (
     sleep_for_rate_limit,
 )
 from quant_data_platform.clients.fred import FREDClient, parse_series_observations
-from quant_data_platform.clients.sec import SECClient, parse_companyfacts, parse_filings, parse_submission_summary
+from quant_data_platform.clients.sec import (
+    SECClient,
+    parse_company_tickers_exchange,
+    parse_companyfacts,
+    parse_filings,
+    parse_submission_summary,
+)
 from quant_data_platform.clients.tiingo import TiingoClient, parse_daily_prices, sleep_for_rate_limit as sleep_for_tiingo
 from quant_data_platform.config import Settings, get_settings
 from quant_data_platform.db import (
@@ -24,6 +30,7 @@ from quant_data_platform.db import (
     upsert_sec_companyfacts,
     upsert_sec_filing_metadata,
     upsert_sec_submission,
+    upsert_sec_ticker_reference,
     upsert_tiingo_corporate_actions,
     upsert_tiingo_daily_prices,
 )
@@ -167,6 +174,32 @@ def ingest_sec_ciks(ciks: Iterable[str], settings: Settings | None = None) -> di
     return stats
 
 
+def ingest_sec_ticker_reference(settings: Settings | None = None) -> dict[str, int]:
+    settings = settings or get_settings()
+    client = SECClient(settings)
+    payload = client.fetch_company_tickers_exchange()
+    checksum = upload_json("sec-raw", f"reference/company_tickers_exchange/{date.today().isoformat()}.json", payload, settings)
+    rows = parse_company_tickers_exchange(payload)
+    with postgres_connection(settings) as conn:
+        upsert_sec_ticker_reference(conn, rows)
+        record_artifact(
+            conn,
+            {
+                "source": "sec",
+                "dataset": "company_tickers_exchange",
+                "source_key": "company_tickers_exchange",
+                "symbol": None,
+                "cik": None,
+                "object_key": f"reference/company_tickers_exchange/{date.today().isoformat()}.json",
+                "payload_sha256": checksum,
+                "available_at": datetime.now(UTC),
+                "metadata": {"endpoint": "company_tickers_exchange"},
+            },
+        )
+        conn.commit()
+    return {"reference_rows": len(rows)}
+
+
 def ingest_fred_series(series_ids: Iterable[str], settings: Settings | None = None) -> dict[str, int]:
     settings = settings or get_settings()
     client = FREDClient(settings)
@@ -209,6 +242,7 @@ def run_market_backfill(symbols: list[str] | None = None, settings: Settings | N
 
 def run_fundamental_backfill(ciks: list[str] | None = None, settings: Settings | None = None) -> dict[str, int]:
     settings = settings or get_settings()
+    ingest_sec_ticker_reference(settings=settings)
     with postgres_connection(settings) as conn:
         ciks = ciks or fetch_universe_ciks(conn, settings.prototype_cohort)
     return ingest_sec_ciks(ciks, settings=settings)
@@ -216,6 +250,7 @@ def run_fundamental_backfill(ciks: list[str] | None = None, settings: Settings |
 
 def run_daily_incremental(settings: Settings | None = None) -> dict[str, dict[str, int]]:
     settings = settings or get_settings()
+    sec_reference = ingest_sec_ticker_reference(settings=settings)
     with postgres_connection(settings) as conn:
         symbols = fetch_universe_symbols(conn, settings.prototype_cohort)
         ciks = fetch_universe_ciks(conn, settings.prototype_cohort)
@@ -226,6 +261,9 @@ def run_daily_incremental(settings: Settings | None = None) -> dict[str, dict[st
             **ingest_alpha_vantage_overviews(symbols=symbols, settings=settings),
             **ingest_tiingo_prices(symbols=symbols, start_date=recent_start, settings=settings),
         },
-        "fundamentals": run_fundamental_backfill(ciks=ciks, settings=settings),
+        "fundamentals": {
+            **sec_reference,
+            **run_fundamental_backfill(ciks=ciks, settings=settings),
+        },
         "fred": ingest_fred_series(fred_series, settings=settings),
     }

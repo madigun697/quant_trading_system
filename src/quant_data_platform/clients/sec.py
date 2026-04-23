@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 import requests
@@ -9,6 +9,7 @@ from quant_data_platform.config import Settings, get_settings
 from quant_data_platform.utils import parse_date, parse_datetime
 
 SEC_BASE = "https://data.sec.gov"
+SEC_FILES_BASE = "https://www.sec.gov/files"
 
 COMPANYFACT_FIELDS: dict[str, tuple[str, ...]] = {
     "revenue": ("RevenueFromContractWithCustomerExcludingAssessedTax", "Revenues", "SalesRevenueNet"),
@@ -48,6 +49,11 @@ class SECClient:
 
     def fetch_companyfacts(self, cik: str) -> dict[str, Any]:
         response = self.session.get(f"{SEC_BASE}/api/xbrl/companyfacts/CIK{cik.zfill(10)}.json", timeout=30)
+        response.raise_for_status()
+        return response.json()
+
+    def fetch_company_tickers_exchange(self) -> dict[str, Any]:
+        response = self.session.get(f"{SEC_FILES_BASE}/company_tickers_exchange.json", timeout=30)
         response.raise_for_status()
         return response.json()
 
@@ -139,6 +145,33 @@ def parse_companyfacts(payload: dict[str, Any], filings_by_accession: dict[str, 
     return rows
 
 
+def parse_company_tickers_exchange(payload: dict[str, Any], as_of_date: datetime | None = None) -> list[dict[str, Any]]:
+    fields = payload.get("fields", [])
+    rows: list[dict[str, Any]] = []
+    snapshot_date = (as_of_date or datetime.now(UTC)).date()
+
+    for item in payload.get("data", []):
+        record = dict(zip(fields, item, strict=False))
+        source_ticker = record.get("ticker")
+        if not source_ticker:
+            continue
+        cik = str(record["cik"]).zfill(10)
+        entity_name = record.get("name")
+        exchange = record.get("exchange")
+        for symbol_alias in _ticker_aliases(source_ticker):
+            rows.append(
+                {
+                    "symbol_alias": symbol_alias,
+                    "source_ticker": source_ticker,
+                    "cik": cik,
+                    "entity_name": entity_name,
+                    "exchange": exchange,
+                    "as_of_date": snapshot_date,
+                }
+            )
+    return rows
+
+
 def _build_filing_href(cik: str, accession: str, document: str | None) -> str | None:
     if not document:
         return None
@@ -150,3 +183,15 @@ def _safe_get(values: list[Any], index: int) -> Any:
     if index >= len(values):
         return None
     return values[index]
+
+
+def _ticker_aliases(ticker: str) -> list[str]:
+    aliases = [ticker]
+    if "-" in ticker:
+        aliases.append(ticker.replace("-", "."))
+        aliases.append(ticker.replace("-", "/"))
+    deduped: list[str] = []
+    for alias in aliases:
+        if alias not in deduped:
+            deduped.append(alias)
+    return deduped

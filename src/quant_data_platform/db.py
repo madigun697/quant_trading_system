@@ -27,14 +27,32 @@ def fetch_universe_ciks(conn: Connection, cohort: str) -> list[str]:
     with conn.cursor() as cur:
         cur.execute(
             """
-            select distinct o.cik
+            with latest_overview as (
+                select symbol, cik, asset_type,
+                    row_number() over (partition by symbol order by as_of_date desc, ingested_at desc) as rn
+                from raw.alpha_vantage_overview
+            ),
+            latest_sec_reference as (
+                select symbol_alias, cik, entity_name,
+                    row_number() over (partition by symbol_alias order by as_of_date desc, fetched_at desc) as rn
+                from raw.sec_ticker_reference
+            )
+            select distinct coalesce(o.cik, r.cik) as cik
             from meta.universe_members u
-            join raw.alpha_vantage_overview o
+            left join latest_overview o
               on o.symbol = u.symbol
+             and o.rn = 1
+            left join latest_sec_reference r
+              on r.symbol_alias = u.symbol
+             and r.rn = 1
             where u.cohort = %s
               and u.is_active = true
-              and o.cik is not null
-            order by o.cik
+              and coalesce(o.cik, r.cik) is not null
+              and coalesce(o.asset_type, '') <> 'ETF'
+              and coalesce(r.entity_name, '') not ilike '%%ETF%%'
+              and coalesce(r.entity_name, '') not ilike '%%TRUST%%'
+              and coalesce(r.entity_name, '') not ilike '%%FUND%%'
+            order by coalesce(o.cik, r.cik)
             """,
             (cohort,),
         )
@@ -184,6 +202,23 @@ def upsert_sec_submission(conn: Connection, row: dict[str, Any]) -> None:
             """,
             row,
         )
+
+
+def upsert_sec_ticker_reference(conn: Connection, rows: Iterable[dict[str, Any]]) -> None:
+    sql = """
+        insert into raw.sec_ticker_reference (
+            symbol_alias, source_ticker, cik, entity_name, exchange, as_of_date
+        ) values (
+            %(symbol_alias)s, %(source_ticker)s, %(cik)s, %(entity_name)s, %(exchange)s, %(as_of_date)s
+        )
+        on conflict (symbol_alias, as_of_date) do update set
+            source_ticker = excluded.source_ticker,
+            cik = excluded.cik,
+            entity_name = excluded.entity_name,
+            exchange = excluded.exchange,
+            fetched_at = now()
+    """
+    _executemany(conn, sql, rows)
 
 
 def upsert_sec_filing_metadata(conn: Connection, rows: Iterable[dict[str, Any]]) -> None:

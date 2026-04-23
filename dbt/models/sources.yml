@@ -8,6 +8,7 @@ sources:
       - name: alpha_vantage_overview
       - name: tiingo_daily_prices
       - name: tiingo_corporate_actions
+      - name: sec_ticker_reference
       - name: sec_filing_metadata
       - name: sec_companyfacts_facts
       - name: fred_series_observations

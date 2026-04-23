@@ -137,6 +137,17 @@ create table if not exists raw.sec_submissions (
   submission_json jsonb not null
 );
 
+create table if not exists raw.sec_ticker_reference (
+  symbol_alias text not null,
+  source_ticker text not null,
+  cik text not null,
+  entity_name text,
+  exchange text,
+  as_of_date date not null,
+  fetched_at timestamptz not null default now(),
+  primary key (symbol_alias, as_of_date)
+);
+
 create table if not exists raw.sec_filing_metadata (
   cik text not null,
   accession_number text not null,

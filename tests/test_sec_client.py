@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import json
 
-from quant_data_platform.clients.sec import parse_companyfacts, parse_filings, parse_submission_summary
+from quant_data_platform.clients.sec import (
+    parse_company_tickers_exchange,
+    parse_companyfacts,
+    parse_filings,
+    parse_submission_summary,
+)
 from tests.conftest import FIXTURE_DIR
 
 
@@ -21,3 +26,10 @@ def test_parse_companyfacts() -> None:
     rows = parse_companyfacts(companyfacts, {row["accession_number"]: row for row in filing_rows})
     assert rows
     assert any(row["concept"] == "Revenues" for row in rows)
+
+
+def test_parse_company_tickers_exchange() -> None:
+    payload = json.loads((FIXTURE_DIR / "sec_company_tickers_exchange.json").read_text())
+    rows = parse_company_tickers_exchange(payload)
+    assert any(row["symbol_alias"] == "BRK.B" and row["cik"] == "0001067983" for row in rows)
+    assert any(row["symbol_alias"] == "AAPL" and row["cik"] == "0000320193" for row in rows)
