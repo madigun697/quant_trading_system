@@ -17,6 +17,6 @@ def test_postgres_dsn() -> None:
 
 def test_universe_defaults() -> None:
     settings = Settings()
-    assert settings.default_cohort == "us_liquidity_1000_v1"
-    assert settings.universe_buffer_cohort == "us_liquidity_1500_buffer_v1"
-    assert settings.universe_target_size == 1000
+    assert settings.default_cohort == "us_liquidity_700_v1"
+    assert settings.universe_buffer_cohort == "us_liquidity_900_buffer_v1"
+    assert settings.universe_target_size == 700

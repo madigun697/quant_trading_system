@@ -4,11 +4,11 @@ from airflow.models import Variable
 
 
 def get_default_cohort() -> str:
-    return Variable.get("default_cohort", default_var="us_liquidity_1000_v1")
+    return Variable.get("default_cohort", default_var="us_liquidity_700_v1")
 
 
 def get_default_buffer_cohort() -> str:
-    return Variable.get("buffer_cohort", default_var="us_liquidity_1500_buffer_v1")
+    return Variable.get("buffer_cohort", default_var="us_liquidity_900_buffer_v1")
 
 
 def get_default_symbols() -> list[str]:

@@ -21,8 +21,8 @@ def build_liquidity_universe_dag() -> None:
     def build(
         cohort: str | None = None,
         buffer_cohort: str | None = None,
-        buffer_size: int = 1500,
-        target_size: int = 1000,
+        buffer_size: int = 900,
+        target_size: int = 700,
         discovery_days: int = 90,
         lookback_days: int = 60,
     ) -> dict[str, int]:

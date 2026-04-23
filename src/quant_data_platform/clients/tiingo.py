@@ -63,6 +63,25 @@ class TiingoClient:
             raise last_error
         raise ValueError(f"No Tiingo symbol candidate succeeded for {symbol}")
 
+    @retry(stop=stop_after_attempt(3), wait=wait_fixed(10))
+    def fetch_batch_daily_prices(
+        self,
+        symbols: list[str],
+        start_date: date | None = None,
+        end_date: date | None = None,
+    ) -> list[dict[str, Any]] | dict[str, Any]:
+        params: dict[str, str] = {"tickers": ",".join(symbols)}
+        if start_date is not None:
+            params["startDate"] = start_date.isoformat()
+        if end_date is not None:
+            params["endDate"] = end_date.isoformat()
+        response = self.session.get(f"{TIINGO_BASE}/prices", params=params, timeout=60)
+        response.raise_for_status()
+        payload = response.json()
+        if isinstance(payload, dict) and payload.get("detail"):
+            raise ValueError(payload["detail"])
+        return payload
+
 
 def parse_daily_prices(payload: list[dict[str, Any]], symbol: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     price_rows: list[dict[str, Any]] = []
@@ -127,6 +146,23 @@ def parse_daily_prices(payload: list[dict[str, Any]], symbol: str) -> tuple[list
             )
 
     return price_rows, action_rows
+
+
+def parse_batch_daily_prices(payload: list[dict[str, Any]] | dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    if isinstance(payload, dict):
+        normalized: dict[str, list[dict[str, Any]]] = {}
+        for key, value in payload.items():
+            if isinstance(value, list):
+                normalized[key] = value
+        return normalized
+
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for row in payload:
+        symbol = row.get("ticker") or row.get("symbol") or row.get("tickerSymbol")
+        if not symbol:
+            continue
+        grouped.setdefault(symbol, []).append(row)
+    return grouped
 
 
 def _to_decimal(value: Any) -> Decimal | None:

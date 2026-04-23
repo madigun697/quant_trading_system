@@ -25,6 +25,8 @@ def build_backfill_market_data() -> None:
         start_date: str | None = None,
         end_date: str | None = None,
         symbol_set: list[str] | None = None,
+        request_budget: int | None = None,
+        reset_cursor: bool = False,
         force_reload: bool = False,
     ) -> dict[str, int]:
         del force_reload
@@ -35,6 +37,8 @@ def build_backfill_market_data() -> None:
             mode=mode,
             start_date=pendulum.parse(start_date).date() if start_date else None,
             end_date=pendulum.parse(end_date).date() if end_date else None,
+            request_budget=request_budget,
+            reset_cursor=reset_cursor,
         )
 
     backfill()

@@ -743,6 +743,44 @@ def fetch_active_fred_series(conn: Connection) -> list[str]:
         return [row["series_id"] for row in cur.fetchall()]
 
 
+def get_ingestion_watermark(conn: Connection, *, source_name: str, resource_name: str) -> str | None:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            select cursor_value
+            from meta.ingestion_watermarks
+            where source_name = %s
+              and resource_name = %s
+            """,
+            (source_name, resource_name),
+        )
+        row = cur.fetchone()
+        return row["cursor_value"] if row else None
+
+
+def upsert_ingestion_watermark(
+    conn: Connection,
+    *,
+    source_name: str,
+    resource_name: str,
+    cursor_value: str | None,
+) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            insert into meta.ingestion_watermarks (
+                source_name, resource_name, cursor_value
+            ) values (
+                %s, %s, %s
+            )
+            on conflict (source_name, resource_name) do update set
+                cursor_value = excluded.cursor_value,
+                updated_at = now()
+            """,
+            (source_name, resource_name, cursor_value),
+        )
+
+
 def _executemany(conn: Connection, sql: str, rows: Iterable[dict[str, Any]]) -> None:
     rows = list(rows)
     if not rows:

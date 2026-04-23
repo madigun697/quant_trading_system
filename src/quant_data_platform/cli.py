@@ -29,9 +29,11 @@ def build_parser() -> argparse.ArgumentParser:
     market.add_argument("--symbols", nargs="*", default=None)
     market.add_argument("--cohort", default=None)
     market.add_argument("--stage", default=None)
-    market.add_argument("--mode", choices=["recent", "full"], default="full")
+    market.add_argument("--mode", choices=["recent", "full", "chunked"], default="full")
     market.add_argument("--start-date", default=None)
     market.add_argument("--end-date", default=None)
+    market.add_argument("--request-budget", type=int, default=None)
+    market.add_argument("--reset-cursor", action="store_true")
 
     fundamentals = subparsers.add_parser("backfill-fundamentals")
     fundamentals.add_argument("--ciks", nargs="*", default=None)
@@ -68,6 +70,8 @@ def main() -> None:
             mode=args.mode,
             start_date=parse_date(args.start_date),
             end_date=parse_date(args.end_date),
+            request_budget=args.request_budget,
+            reset_cursor=args.reset_cursor,
         )
     elif args.command == "backfill-fundamentals":
         result = run_fundamental_backfill(

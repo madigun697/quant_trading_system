@@ -17,7 +17,12 @@ from quant_data_platform.clients.sec import (
     parse_filings,
     parse_submission_summary,
 )
-from quant_data_platform.clients.tiingo import TiingoClient, parse_daily_prices, sleep_for_rate_limit as sleep_for_tiingo
+from quant_data_platform.clients.tiingo import (
+    TiingoClient,
+    parse_batch_daily_prices,
+    parse_daily_prices,
+    sleep_for_rate_limit as sleep_for_tiingo,
+)
 from quant_data_platform.config import Settings, get_settings
 from quant_data_platform.db import (
     create_universe_build_run,
@@ -30,9 +35,11 @@ from quant_data_platform.db import (
     fetch_universe_ciks,
     fetch_universe_symbols,
     finalize_universe_build_run,
+    get_ingestion_watermark,
     record_artifact,
     replace_universe_members,
     upsert_fred_series,
+    upsert_ingestion_watermark,
     upsert_listing_status,
     upsert_overview,
     upsert_sec_companyfacts,
@@ -131,6 +138,63 @@ def ingest_tiingo_prices(
             stats["action_rows"] += len(action_rows)
         conn.commit()
     return stats
+
+
+def ingest_tiingo_prices_batched(
+    *,
+    symbols: list[str],
+    start_date: date,
+    end_date: date,
+    batch_size: int,
+    settings: Settings | None = None,
+) -> dict[str, int]:
+    settings = settings or get_settings()
+    client = TiingoClient(settings)
+    stats = {"price_rows": 0, "action_rows": 0, "request_count": 0, "symbol_count": 0}
+
+    with postgres_connection(settings) as conn:
+        for start_idx in range(0, len(symbols), batch_size):
+            batch_symbols = symbols[start_idx : start_idx + batch_size]
+            payload = client.fetch_batch_daily_prices(batch_symbols, start_date=start_date, end_date=end_date)
+            sleep_for_tiingo(settings.tiingo_throttle_seconds)
+            checksum = upload_json(
+                "tiingo-raw",
+                f"batch_daily_prices/{start_idx:05d}_{date.today().isoformat()}.json",
+                payload,
+                settings,
+            )
+            record_artifact(
+                conn,
+                {
+                    "source": "tiingo",
+                    "dataset": "batch_daily_prices",
+                    "source_key": f"batch_{start_idx:05d}",
+                    "symbol": None,
+                    "cik": None,
+                    "object_key": f"batch_daily_prices/{start_idx:05d}_{date.today().isoformat()}.json",
+                    "payload_sha256": checksum,
+                    "available_at": datetime.now(UTC),
+                    "metadata": {
+                        "symbols": batch_symbols,
+                        "start_date": start_date.isoformat(),
+                        "end_date": end_date.isoformat(),
+                    },
+                },
+            )
+            for symbol, rows in parse_batch_daily_prices(payload).items():
+                price_rows, action_rows = parse_daily_prices(rows, symbol=symbol)
+                upsert_tiingo_daily_prices(conn, price_rows)
+                upsert_tiingo_corporate_actions(conn, action_rows)
+                stats["price_rows"] += len(price_rows)
+                stats["action_rows"] += len(action_rows)
+                stats["symbol_count"] += 1
+            stats["request_count"] += 1
+        conn.commit()
+    return stats
+
+
+def _chunked(values: list[str], size: int) -> list[list[str]]:
+    return [values[index : index + size] for index in range(0, len(values), size)]
 
 
 def ingest_sec_ciks(ciks: Iterable[str], settings: Settings | None = None) -> dict[str, int]:
@@ -296,10 +360,11 @@ def build_liquidity_universe(
             }
         )
 
-        price_stats = ingest_tiingo_prices(
-            candidate_symbols,
+        price_stats = ingest_tiingo_prices_batched(
+            symbols=candidate_symbols,
             start_date=recent_start,
             end_date=snapshot_end,
+            batch_size=settings.tiingo_discovery_batch_size,
             settings=settings,
         )
 
@@ -314,6 +379,7 @@ def build_liquidity_universe(
                 raise ValueError("No liquidity-ranked symbols were produced during universe build.")
             buffer_symbols = [row["symbol"] for row in ranked_rows]
             buffer_snapshot_date = ranked_rows[0]["snapshot_date"]
+            target_symbols = buffer_symbols[:target_size]
             replace_universe_members(
                 conn,
                 cohort=buffer_cohort,
@@ -336,15 +402,29 @@ def build_liquidity_universe(
                     for row in ranked_rows
                 ],
             )
+            replace_universe_members(
+                conn,
+                cohort=cohort,
+                symbols=target_symbols,
+                effective_date=buffer_snapshot_date,
+                source="liquidity_build_current_target",
+            )
+            upsert_universe_rank_snapshots(
+                conn,
+                [
+                    {
+                        "snapshot_date": row["snapshot_date"],
+                        "cohort": cohort,
+                        "symbol": row["symbol"],
+                        "rank": row["liquidity_rank"],
+                        "adv60": row["adv60"],
+                        "eligibility_status": "selected",
+                        "source": "liquidity_build_recent_scan",
+                    }
+                    for row in ranked_rows[:target_size]
+                ],
+            )
             conn.commit()
-
-        snapshot_stats = refresh_monthly_universe_snapshots(
-            cohort=cohort,
-            buffer_cohort=buffer_cohort,
-            target_size=target_size,
-            lookback_days=lookback_days,
-            settings=settings,
-        )
         with postgres_connection(settings) as conn:
             finalize_universe_build_run(
                 conn,
@@ -352,12 +432,12 @@ def build_liquidity_universe(
                 status="success",
                 candidate_count=len(candidate_symbols),
                 buffer_count=len(buffer_symbols),
-                target_count=snapshot_stats["distinct_symbols"],
+                target_count=len(target_symbols),
                 metadata={
                     "latest_buffer_snapshot_date": buffer_snapshot_date.isoformat(),
                     "recent_scan_start_date": recent_start.isoformat(),
                     "recent_scan_end_date": snapshot_end.isoformat(),
-                    "snapshot_count": snapshot_stats["snapshot_count"],
+                    "discovery_request_count": price_stats["request_count"],
                 },
             )
             conn.commit()
@@ -366,8 +446,8 @@ def build_liquidity_universe(
             **sec_reference,
             "candidate_count": len(candidate_symbols),
             "buffer_count": len(buffer_symbols),
+            "target_count": len(target_symbols),
             **price_stats,
-            **snapshot_stats,
         }
     except Exception:
         with postgres_connection(settings) as conn:
@@ -445,6 +525,8 @@ def run_market_backfill(
     mode: str = "full",
     start_date: date | None = None,
     end_date: date | None = None,
+    request_budget: int | None = None,
+    reset_cursor: bool = False,
     settings: Settings | None = None,
 ) -> dict[str, int]:
     settings = settings or get_settings()
@@ -465,6 +547,30 @@ def run_market_backfill(
     effective_start = start_date
     if mode == "recent" and effective_start is None:
         effective_start = discovery_start_date(snapshot_as_of, settings.liquidity_discovery_days)
+    if mode == "chunked":
+        request_budget = request_budget or settings.tiingo_hourly_request_budget
+        with postgres_connection(settings) as conn:
+            ordered_symbols = fetch_ranked_universe_symbols(conn, cohort) or fetch_universe_symbols(conn, cohort, snapshot_as_of=snapshot_as_of)
+            resource_name = f"tiingo_history:{cohort}"
+            offset = 0 if reset_cursor else int(get_ingestion_watermark(conn, source_name="tiingo", resource_name=resource_name) or "0")
+            chunk_symbols = ordered_symbols[offset : offset + request_budget]
+        price_stats = ingest_tiingo_prices(chunk_symbols, start_date=effective_start, end_date=end_date, settings=settings)
+        next_offset = offset + len(chunk_symbols)
+        with postgres_connection(settings) as conn:
+            upsert_ingestion_watermark(
+                conn,
+                source_name="tiingo",
+                resource_name=resource_name,
+                cursor_value=str(next_offset),
+            )
+            conn.commit()
+        return {
+            "symbol_count": len(chunk_symbols),
+            "processed_offset_start": offset,
+            "processed_offset_end": next_offset,
+            "remaining_symbols": max(len(ordered_symbols) - next_offset, 0),
+            **price_stats,
+        }
     listing_rows = ingest_alpha_vantage_listing_status(settings=settings)
     price_stats = ingest_tiingo_prices(symbols, start_date=effective_start, end_date=end_date, settings=settings)
     return {"listing_rows": listing_rows, "symbol_count": len(symbols), **price_stats}
