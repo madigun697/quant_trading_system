@@ -5,6 +5,7 @@ from decimal import Decimal
 from typing import Any, Iterable
 
 from psycopg import Connection
+from psycopg.types.json import Jsonb
 
 
 def fetch_universe_symbols(conn: Connection, cohort: str) -> list[str]:
@@ -60,6 +61,7 @@ def upsert_listing_status(conn: Connection, rows: Iterable[dict[str, Any]]) -> N
 
 
 def upsert_overview(conn: Connection, rows: Iterable[dict[str, Any]]) -> None:
+    rows = [_with_jsonb(row, "overview_json") for row in rows]
     sql = """
         insert into raw.alpha_vantage_overview (
             symbol, as_of_date, cik, name, exchange, sector, industry, asset_type, market_cap, shares_outstanding, overview_json
@@ -118,6 +120,7 @@ def upsert_corporate_actions(conn: Connection, rows: Iterable[dict[str, Any]]) -
 
 
 def upsert_sec_submission(conn: Connection, row: dict[str, Any]) -> None:
+    row = _with_jsonb(row, "submission_json")
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -166,6 +169,7 @@ def upsert_sec_filing_metadata(conn: Connection, rows: Iterable[dict[str, Any]])
 
 
 def upsert_sec_companyfacts(conn: Connection, rows: Iterable[dict[str, Any]]) -> None:
+    rows = [_with_jsonb(row, "raw_fact") for row in rows]
     sql = """
         insert into raw.sec_companyfacts_facts (
             cik, accession_number, taxonomy, concept, unit, frame, period_start, period_end, fiscal_year, fiscal_period,
@@ -204,6 +208,7 @@ def upsert_fred_series(conn: Connection, rows: Iterable[dict[str, Any]]) -> None
 
 
 def record_artifact(conn: Connection, row: dict[str, Any]) -> None:
+    row = _with_jsonb(row, "metadata")
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -229,6 +234,14 @@ def _executemany(conn: Connection, sql: str, rows: Iterable[dict[str, Any]]) -> 
         return
     with conn.cursor() as cur:
         cur.executemany(sql, rows)
+
+
+def _with_jsonb(row: dict[str, Any], *keys: str) -> dict[str, Any]:
+    converted = dict(row)
+    for key in keys:
+        if key in converted and converted[key] is not None:
+            converted[key] = Jsonb(converted[key])
+    return converted
 
 
 def to_decimal(value: str | None) -> Decimal | None:

@@ -3,7 +3,14 @@ from __future__ import annotations
 import json
 from datetime import date
 
-from quant_data_platform.clients.alpha_vantage import parse_daily_adjusted, parse_listing_status_csv, parse_overview
+import pytest
+
+from quant_data_platform.clients.alpha_vantage import (
+    _raise_if_api_error,
+    parse_daily_adjusted,
+    parse_listing_status_csv,
+    parse_overview,
+)
 from tests.conftest import FIXTURE_DIR
 
 
@@ -28,3 +35,9 @@ def test_parse_listing_status_csv() -> None:
     rows = parse_listing_status_csv(payload, source_file_date=date(2025, 1, 15), state="active")
     assert rows[0]["symbol"] == "IBM"
     assert rows[0]["status"] == "active"
+    assert rows[0]["delisting_date"] is None
+
+
+def test_raise_if_api_error_for_information_payload() -> None:
+    with pytest.raises(ValueError):
+        _raise_if_api_error({"Information": "rate limited"})

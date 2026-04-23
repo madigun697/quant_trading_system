@@ -8,6 +8,7 @@ from quant_data_platform.clients.alpha_vantage import (
     parse_daily_adjusted,
     parse_listing_status_csv,
     parse_overview,
+    sleep_for_rate_limit,
 )
 from quant_data_platform.clients.fred import FREDClient, parse_series_observations
 from quant_data_platform.clients.sec import SECClient, parse_companyfacts, parse_filings, parse_submission_summary
@@ -34,6 +35,7 @@ def ingest_alpha_vantage_listing_status(state: str = "active", settings: Setting
     settings = settings or get_settings()
     client = AlphaVantageClient(settings)
     csv_payload = client.fetch_listing_status(state=state)
+    sleep_for_rate_limit(settings.alpha_vantage_throttle_seconds)
     rows = parse_listing_status_csv(csv_payload, source_file_date=date.today(), state=state)
     with postgres_connection(settings) as conn:
         upsert_listing_status(conn, rows)
@@ -48,6 +50,7 @@ def ingest_alpha_vantage_symbols(symbols: Iterable[str], settings: Settings | No
     with postgres_connection(settings) as conn:
         for symbol in symbols:
             overview_payload = client.fetch_overview(symbol)
+            sleep_for_rate_limit(settings.alpha_vantage_throttle_seconds)
             overview_checksum = upload_json("alphavantage-raw", f"overview/{symbol}/{date.today().isoformat()}.json", overview_payload, settings)
             record_artifact(
                 conn,
@@ -67,6 +70,7 @@ def ingest_alpha_vantage_symbols(symbols: Iterable[str], settings: Settings | No
             stats["overview_rows"] += 1
 
             daily_payload = client.fetch_daily_adjusted(symbol)
+            sleep_for_rate_limit(settings.alpha_vantage_throttle_seconds)
             daily_checksum = upload_json("alphavantage-raw", f"daily_adjusted/{symbol}/{date.today().isoformat()}.json", daily_payload, settings)
             record_artifact(
                 conn,

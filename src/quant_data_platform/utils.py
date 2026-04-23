@@ -24,13 +24,13 @@ def _json_default(value: Any) -> str:
 
 
 def parse_date(value: str | None) -> date | None:
-    if not value:
+    if value in (None, "", "None", "null"):
         return None
     return date.fromisoformat(value)
 
 
 def parse_datetime(value: str | None) -> datetime | None:
-    if not value:
+    if value in (None, "", "None", "null"):
         return None
     normalized = value.replace("Z", "+00:00")
     return datetime.fromisoformat(normalized)

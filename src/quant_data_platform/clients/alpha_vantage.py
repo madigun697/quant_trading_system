@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import time
 from datetime import date
 from decimal import Decimal
 from typing import Any
@@ -154,9 +155,16 @@ def _raise_if_api_error(payload: dict[str, Any]) -> None:
         raise ValueError(payload["Error Message"])
     if "Note" in payload:
         raise ValueError(payload["Note"])
+    if "Information" in payload:
+        raise ValueError(payload["Information"])
 
 
 def _to_decimal(value: str | None) -> Decimal | None:
     if value in (None, "", "None", "null"):
         return None
     return Decimal(value)
+
+
+def sleep_for_rate_limit(seconds: float) -> None:
+    if seconds > 0:
+        time.sleep(seconds)
