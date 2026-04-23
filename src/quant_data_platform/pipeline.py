@@ -721,8 +721,11 @@ def run_fundamental_backfill(
     *,
     ciks: list[str] | None = None,
     cohort: str | None = None,
+    mode: str = "full",
     stage: str | None = None,
     as_of_date: date | None = None,
+    request_budget: int | None = None,
+    reset_cursor: bool = False,
     settings: Settings | None = None,
 ) -> dict[str, int]:
     settings = settings or get_settings()
@@ -731,8 +734,36 @@ def run_fundamental_backfill(
     sec_reference = ingest_sec_ticker_reference(settings=settings)
     limit = None if stage in (None, "full") else int(stage)
     with postgres_connection(settings) as conn:
-        ciks = ciks or fetch_universe_ciks(conn, cohort, snapshot_as_of=snapshot_as_of, limit=limit)
-    return {**sec_reference, "cik_count": len(ciks), **ingest_sec_ciks(ciks, settings=settings)}
+        ordered_ciks = ciks or fetch_universe_ciks(conn, cohort, snapshot_as_of=snapshot_as_of, limit=limit)
+        if mode == "chunked":
+            request_budget = request_budget or 25
+            resource_name = f"sec_companyfacts:{cohort if ciks is None else 'adhoc'}"
+            offset = 0 if reset_cursor else int(get_ingestion_watermark(conn, source_name="sec", resource_name=resource_name) or "0")
+            chunk_ciks = ordered_ciks[offset : offset + request_budget]
+        else:
+            resource_name = None
+            offset = 0
+            chunk_ciks = ordered_ciks
+    stats = ingest_sec_ciks(chunk_ciks, settings=settings)
+    if mode == "chunked":
+        next_offset = offset + len(chunk_ciks)
+        with postgres_connection(settings) as conn:
+            upsert_ingestion_watermark(
+                conn,
+                source_name="sec",
+                resource_name=resource_name,
+                cursor_value=str(next_offset),
+            )
+            conn.commit()
+        return {
+            **sec_reference,
+            "cik_count": len(chunk_ciks),
+            "processed_offset_start": offset,
+            "processed_offset_end": next_offset,
+            "remaining_ciks": max(len(ordered_ciks) - next_offset, 0),
+            **stats,
+        }
+    return {**sec_reference, "cik_count": len(chunk_ciks), **stats}
 
 
 def run_daily_incremental(*, cohort: str | None = None, settings: Settings | None = None) -> dict[str, dict[str, int]]:

@@ -38,8 +38,11 @@ def build_parser() -> argparse.ArgumentParser:
     fundamentals = subparsers.add_parser("backfill-fundamentals")
     fundamentals.add_argument("--ciks", nargs="*", default=None)
     fundamentals.add_argument("--cohort", default=None)
+    fundamentals.add_argument("--mode", choices=["full", "chunked"], default="full")
     fundamentals.add_argument("--stage", default=None)
     fundamentals.add_argument("--as-of-date", default=None)
+    fundamentals.add_argument("--request-budget", type=int, default=None)
+    fundamentals.add_argument("--reset-cursor", action="store_true")
 
     fred = subparsers.add_parser("sync-fred")
     fred.add_argument("--series", nargs="+", required=True)
@@ -77,8 +80,11 @@ def main() -> None:
         result = run_fundamental_backfill(
             ciks=args.ciks,
             cohort=args.cohort,
+            mode=args.mode,
             stage=args.stage,
             as_of_date=parse_date(args.as_of_date),
+            request_budget=args.request_budget,
+            reset_cursor=args.reset_cursor,
         )
     elif args.command == "sync-fred":
         result = ingest_fred_series(args.series)
