@@ -6,6 +6,8 @@ sources:
     tables:
       - name: alpha_vantage_listing_status
       - name: alpha_vantage_overview
+      - name: market_daily_prices
+      - name: market_corporate_actions
       - name: tiingo_daily_prices
       - name: tiingo_corporate_actions
       - name: sec_ticker_reference

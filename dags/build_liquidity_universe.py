@@ -14,7 +14,7 @@ from common import get_default_buffer_cohort, get_default_cohort
     start_date=pendulum.datetime(2024, 1, 1, tz="America/New_York"),
     schedule=None,
     catchup=False,
-    tags=["universe", "liquidity", "builder"],
+    tags=["universe", "liquidity", "builder", "yfinance"],
 )
 def build_liquidity_universe_dag() -> None:
     @task

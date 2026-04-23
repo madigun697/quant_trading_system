@@ -14,7 +14,7 @@ from common import get_default_buffer_cohort
     start_date=pendulum.datetime(2024, 1, 1, tz="America/New_York"),
     schedule=None,
     catchup=False,
-    tags=["backfill", "tiingo", "market_data"],
+    tags=["backfill", "market_data", "yfinance"],
 )
 def build_backfill_market_data() -> None:
     @task

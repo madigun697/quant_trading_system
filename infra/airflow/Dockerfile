@@ -14,6 +14,8 @@ RUN pip install --no-cache-dir \
     psycopg2-binary \
     pydantic \
     pydantic-settings \
+    pandas \
     python-dotenv \
     requests \
     tenacity
+RUN pip install --no-cache-dir yfinance

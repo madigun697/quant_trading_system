@@ -3,7 +3,7 @@
 무료 기반 미국 주식 백테스트 데이터 파이프라인 프로토타입입니다.
 
 ## 스택
-- Sources: `SEC + Alpha Vantage + Tiingo + FRED`
+- Sources: `SEC + Alpha Vantage + yfinance + Tiingo + FRED`
 - Storage: `PostgreSQL + MinIO`
 - DB Web UI: `pgAdmin`
 - Transform: `dbt-postgres`
@@ -12,7 +12,7 @@
 - Python packaging/runtime: `uv`
 
 ## API Key 준비
-아래 세 값이 필요합니다.
+아래 값들을 준비합니다.
 
 - `ALPHAVANTAGE_API_KEY`
   - 발급: <https://www.alphavantage.co/support/#api-key>
@@ -24,6 +24,9 @@
 - `SEC_USER_AGENT`
   - 예시: `YourName your@email.com`
   - 참고: <https://www.sec.gov/search-filings/edgar-application-programming-interfaces>
+- `yfinance`
+  - 별도 API 키는 없습니다.
+  - 용도: 장기 history 백필 전용
 
 `.env.example`를 복사해 `.env`를 만들고 값을 채웁니다.
 
@@ -69,9 +72,15 @@ docker compose config
 
 ## 소스 역할
 - `Alpha Vantage`: listing status, symbol overview
-- `Tiingo`: 장기 일별 가격, 배당, 분할 기반 기업행위
+- `yfinance`: 장기 history 백필, 배당, 분할 기반 기업행위
+- `Tiingo`: 일별 incremental 가격 업데이트
 - `SEC`: filings, companyfacts
 - `FRED`: risk-free series
+
+## 현재 권장 운영 방식
+- `build_liquidity_universe`와 `backfill_market_data`는 `yfinance` 기반 장기 history를 사용합니다.
+- `daily_incremental_pipeline`의 시장 데이터 증분은 `Tiingo`를 사용합니다.
+- dbt의 `stg_daily_prices`는 `Tiingo`와 `yfinance_history`가 겹치는 날짜에서 `Tiingo`를 우선합니다.
 
 ## dbt 모델
 - `stg_*`: 원천 정규화

@@ -13,9 +13,9 @@ from common import get_default_buffer_cohort, get_default_cohort
 @dag(
     dag_id="hourly_market_bootstrap",
     start_date=pendulum.datetime(2024, 1, 1, tz="America/New_York"),
-    schedule="0 * * * *",
+    schedule=None,
     catchup=False,
-    tags=["bootstrap", "hourly", "tiingo"],
+    tags=["bootstrap", "manual", "yfinance"],
 )
 def build_hourly_market_bootstrap() -> None:
     @task
@@ -47,7 +47,7 @@ def build_hourly_market_bootstrap() -> None:
     @task
     def backfill_chunk(
         cohort: str | None = None,
-        request_budget: int = 50,
+        request_budget: int = 100,
         start_date: str = "1960-01-01",
     ) -> dict[str, int]:
         return run_market_backfill(

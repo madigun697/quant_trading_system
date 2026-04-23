@@ -26,6 +26,7 @@ from quant_data_platform.clients.tiingo import (
     parse_daily_prices,
     sleep_for_rate_limit as sleep_for_tiingo,
 )
+from quant_data_platform.clients.yfinance import YFinanceClient, parse_history_payload
 from quant_data_platform.config import Settings, get_settings
 from quant_data_platform.db import (
     create_universe_build_run,
@@ -140,6 +141,61 @@ def ingest_tiingo_prices(
             stats["price_rows"] += len(price_rows)
             stats["action_rows"] += len(action_rows)
         conn.commit()
+    return stats
+
+
+def ingest_yfinance_prices(
+    symbols: Iterable[str],
+    start_date: date | None = None,
+    end_date: date | None = None,
+    *,
+    batch_size: int | None = None,
+    settings: Settings | None = None,
+) -> dict[str, int]:
+    settings = settings or get_settings()
+    client = YFinanceClient(timeout_seconds=settings.yfinance_timeout_seconds)
+    ordered_symbols = list(dict.fromkeys(symbols))
+    batch_size = batch_size or settings.yfinance_batch_size
+    stats = {"price_rows": 0, "action_rows": 0, "request_count": 0, "symbol_count": 0, "empty_symbols": 0}
+    history_start = start_date or date(1960, 1, 1)
+
+    with postgres_connection(settings) as conn:
+        for batch_index, batch_symbols in enumerate(_chunked(ordered_symbols, batch_size)):
+            payloads = client.fetch_history_batch(
+                batch_symbols,
+                start_date=history_start,
+                end_date=end_date,
+            )
+            stats["request_count"] += 1
+            missing_symbols = set(batch_symbols) - set(payloads)
+            stats["empty_symbols"] += len(missing_symbols)
+            for symbol, payload in payloads.items():
+                checksum = upload_json("yfinance-raw", f"history/{symbol}/{date.today().isoformat()}.json", payload, settings)
+                record_artifact(
+                    conn,
+                    {
+                        "source": "yfinance",
+                        "dataset": "history",
+                        "source_key": symbol,
+                        "symbol": symbol,
+                        "cik": None,
+                        "object_key": f"history/{symbol}/{date.today().isoformat()}.json",
+                        "payload_sha256": checksum,
+                        "available_at": datetime.now(UTC),
+                        "metadata": {
+                            "batch_index": batch_index,
+                            "start_date": history_start.isoformat(),
+                            "end_date": end_date.isoformat() if end_date else None,
+                        },
+                    },
+                )
+                price_rows, action_rows = parse_history_payload(payload, symbol=symbol)
+                upsert_tiingo_daily_prices(conn, price_rows)
+                upsert_tiingo_corporate_actions(conn, action_rows)
+                stats["price_rows"] += len(price_rows)
+                stats["action_rows"] += len(action_rows)
+                stats["symbol_count"] += 1
+            conn.commit()
     return stats
 
 
@@ -441,11 +497,11 @@ def build_liquidity_universe(
             }
         )
 
-        price_stats = ingest_tiingo_prices_batched(
-            symbols=candidate_symbols,
+        price_stats = ingest_yfinance_prices(
+            candidate_symbols,
             start_date=recent_start,
             end_date=snapshot_end,
-            batch_size=settings.tiingo_discovery_batch_size,
+            batch_size=settings.yfinance_batch_size,
             settings=settings,
         )
 
@@ -519,6 +575,7 @@ def build_liquidity_universe(
                     "recent_scan_start_date": recent_start.isoformat(),
                     "recent_scan_end_date": snapshot_end.isoformat(),
                     "discovery_request_count": price_stats["request_count"],
+                    "discovery_source": "yfinance_history",
                 },
             )
             conn.commit()
@@ -629,18 +686,18 @@ def run_market_backfill(
     if mode == "recent" and effective_start is None:
         effective_start = discovery_start_date(snapshot_as_of, settings.liquidity_discovery_days)
     if mode == "chunked":
-        request_budget = request_budget or settings.tiingo_hourly_request_budget
+        request_budget = request_budget or settings.yfinance_batch_size
         with postgres_connection(settings) as conn:
             ordered_symbols = fetch_ranked_universe_symbols(conn, cohort) or fetch_universe_symbols(conn, cohort, snapshot_as_of=snapshot_as_of)
-            resource_name = f"tiingo_history:{cohort}"
-            offset = 0 if reset_cursor else int(get_ingestion_watermark(conn, source_name="tiingo", resource_name=resource_name) or "0")
+            resource_name = f"yfinance_history:{cohort}"
+            offset = 0 if reset_cursor else int(get_ingestion_watermark(conn, source_name="yfinance", resource_name=resource_name) or "0")
             chunk_symbols = ordered_symbols[offset : offset + request_budget]
-        price_stats = ingest_tiingo_prices(chunk_symbols, start_date=effective_start, end_date=end_date, settings=settings)
+        price_stats = ingest_yfinance_prices(chunk_symbols, start_date=effective_start, end_date=end_date, settings=settings)
         next_offset = offset + len(chunk_symbols)
         with postgres_connection(settings) as conn:
             upsert_ingestion_watermark(
                 conn,
-                source_name="tiingo",
+                source_name="yfinance",
                 resource_name=resource_name,
                 cursor_value=str(next_offset),
             )
@@ -653,7 +710,10 @@ def run_market_backfill(
             **price_stats,
         }
     listing_rows = ingest_alpha_vantage_listing_status(settings=settings)
-    price_stats = ingest_tiingo_prices(symbols, start_date=effective_start, end_date=end_date, settings=settings)
+    if mode == "recent":
+        price_stats = ingest_tiingo_prices(symbols, start_date=effective_start, end_date=end_date, settings=settings)
+    else:
+        price_stats = ingest_yfinance_prices(symbols, start_date=effective_start, end_date=end_date, settings=settings)
     return {"listing_rows": listing_rows, "symbol_count": len(symbols), **price_stats}
 
 

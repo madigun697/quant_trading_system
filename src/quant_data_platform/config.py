@@ -35,6 +35,8 @@ class Settings(BaseSettings):
     tiingo_hourly_request_budget: int = Field(default=50, alias="TIINGO_HOURLY_REQUEST_BUDGET")
     tiingo_monthly_request_budget: int = Field(default=1000, alias="TIINGO_MONTHLY_REQUEST_BUDGET")
     tiingo_discovery_batch_size: int = Field(default=200, alias="TIINGO_DISCOVERY_BATCH_SIZE")
+    yfinance_batch_size: int = Field(default=100, alias="YFINANCE_BATCH_SIZE")
+    yfinance_timeout_seconds: float = Field(default=30.0, alias="YFINANCE_TIMEOUT_SECONDS")
     alpha_vantage_throttle_seconds: float = Field(default=15.0, alias="ALPHA_VANTAGE_THROTTLE_SECONDS")
     tiingo_throttle_seconds: float = Field(default=1.0, alias="TIINGO_THROTTLE_SECONDS")
 

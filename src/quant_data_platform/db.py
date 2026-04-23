@@ -165,13 +165,29 @@ def fetch_current_liquidity_ranking(
             with candidate_symbols as (
                 select unnest(%(symbols)s::text[]) as symbol
             ),
+            preferred_prices as (
+                select
+                    p.*,
+                    row_number() over (
+                        partition by p.symbol, p.trade_date
+                        order by
+                            case
+                                when p.source = 'tiingo' then 1
+                                when p.source = 'yfinance_history' then 2
+                                else 99
+                            end,
+                            p.ingested_at desc
+                    ) as source_rank
+                from raw.market_daily_prices p
+                join candidate_symbols c using (symbol)
+            ),
             price_base as (
                 select
                     p.symbol,
                     p.trade_date,
                     coalesce(p.adjusted_close, p.close) * coalesce(p.adjusted_volume, p.volume) as dollar_volume
-                from raw.tiingo_daily_prices p
-                join candidate_symbols c using (symbol)
+                from preferred_prices p
+                where p.source_rank = 1
             ),
             scored as (
                 select
@@ -242,6 +258,22 @@ def fetch_monthly_liquidity_snapshots(
                 where cohort = %(buffer_cohort)s
                   and is_active = true
             ),
+            preferred_prices as (
+                select
+                    p.*,
+                    row_number() over (
+                        partition by p.symbol, p.trade_date
+                        order by
+                            case
+                                when p.source = 'tiingo' then 1
+                                when p.source = 'yfinance_history' then 2
+                                else 99
+                            end,
+                            p.ingested_at desc
+                    ) as source_rank
+                from raw.market_daily_prices p
+                join buffer_symbols b using (symbol)
+            ),
             scored as (
                 select
                     p.symbol,
@@ -260,8 +292,8 @@ def fetch_monthly_liquidity_snapshots(
                         partition by p.symbol, date_trunc('month', p.trade_date)
                         order by p.trade_date desc
                     ) as month_end_rank
-                from raw.tiingo_daily_prices p
-                join buffer_symbols b using (symbol)
+                from preferred_prices p
+                where p.source_rank = 1
             ),
             eligible_month_ends as (
                 select
@@ -322,6 +354,22 @@ def fetch_monthly_snapshot_coverage(
                 where cohort = %(buffer_cohort)s
                   and is_active = true
             ),
+            preferred_prices as (
+                select
+                    p.*,
+                    row_number() over (
+                        partition by p.symbol, p.trade_date
+                        order by
+                            case
+                                when p.source = 'tiingo' then 1
+                                when p.source = 'yfinance_history' then 2
+                                else 99
+                            end,
+                            p.ingested_at desc
+                    ) as source_rank
+                from raw.market_daily_prices p
+                join buffer_symbols b using (symbol)
+            ),
             scored as (
                 select
                     p.symbol,
@@ -340,8 +388,8 @@ def fetch_monthly_snapshot_coverage(
                         partition by p.symbol, date_trunc('month', p.trade_date)
                         order by p.trade_date desc
                     ) as month_end_rank
-                from raw.tiingo_daily_prices p
-                join buffer_symbols b using (symbol)
+                from preferred_prices p
+                where p.source_rank = 1
             )
             select
                 trade_date as snapshot_date,
@@ -575,15 +623,23 @@ def upsert_corporate_actions(conn: Connection, rows: Iterable[dict[str, Any]]) -
 
 
 def upsert_tiingo_daily_prices(conn: Connection, rows: Iterable[dict[str, Any]]) -> None:
+    upsert_market_daily_prices(conn, rows)
+
+
+def upsert_tiingo_corporate_actions(conn: Connection, rows: Iterable[dict[str, Any]]) -> None:
+    upsert_market_corporate_actions(conn, rows)
+
+
+def upsert_market_daily_prices(conn: Connection, rows: Iterable[dict[str, Any]]) -> None:
     sql = """
-        insert into raw.tiingo_daily_prices (
+        insert into raw.market_daily_prices (
             symbol, trade_date, open, high, low, close, adjusted_open, adjusted_high, adjusted_low,
             adjusted_close, volume, adjusted_volume, dividend_amount, split_coefficient, source
         ) values (
             %(symbol)s, %(trade_date)s, %(open)s, %(high)s, %(low)s, %(close)s, %(adjusted_open)s, %(adjusted_high)s, %(adjusted_low)s,
             %(adjusted_close)s, %(volume)s, %(adjusted_volume)s, %(dividend_amount)s, %(split_coefficient)s, %(source)s
         )
-        on conflict (symbol, trade_date) do update set
+        on conflict (symbol, trade_date, source) do update set
             open = excluded.open,
             high = excluded.high,
             low = excluded.low,
@@ -602,14 +658,14 @@ def upsert_tiingo_daily_prices(conn: Connection, rows: Iterable[dict[str, Any]])
     _executemany(conn, sql, rows)
 
 
-def upsert_tiingo_corporate_actions(conn: Connection, rows: Iterable[dict[str, Any]]) -> None:
+def upsert_market_corporate_actions(conn: Connection, rows: Iterable[dict[str, Any]]) -> None:
     sql = """
-        insert into raw.tiingo_corporate_actions (
+        insert into raw.market_corporate_actions (
             symbol, trade_date, action_type, action_value, source
         ) values (
             %(symbol)s, %(trade_date)s, %(action_type)s, %(action_value)s, %(source)s
         )
-        on conflict (symbol, trade_date, action_type) do update set
+        on conflict (symbol, trade_date, action_type, source) do update set
             action_value = excluded.action_value,
             source = excluded.source,
             ingested_at = now()

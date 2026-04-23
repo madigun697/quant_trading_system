@@ -152,6 +152,36 @@ create table if not exists raw.tiingo_corporate_actions (
   primary key (symbol, trade_date, action_type)
 );
 
+create table if not exists raw.market_daily_prices (
+  symbol text not null,
+  trade_date date not null,
+  source text not null,
+  open numeric,
+  high numeric,
+  low numeric,
+  close numeric,
+  adjusted_open numeric,
+  adjusted_high numeric,
+  adjusted_low numeric,
+  adjusted_close numeric,
+  volume bigint,
+  adjusted_volume numeric,
+  dividend_amount numeric,
+  split_coefficient numeric,
+  ingested_at timestamptz not null default now(),
+  primary key (symbol, trade_date, source)
+);
+
+create table if not exists raw.market_corporate_actions (
+  symbol text not null,
+  trade_date date not null,
+  action_type text not null,
+  source text not null,
+  action_value numeric,
+  ingested_at timestamptz not null default now(),
+  primary key (symbol, trade_date, action_type, source)
+);
+
 create table if not exists raw.sec_submissions (
   cik text primary key,
   entity_name text,
