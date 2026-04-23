@@ -3,6 +3,9 @@ from __future__ import annotations
 from datetime import UTC, date, datetime
 from typing import Iterable
 
+from requests import HTTPError
+from tenacity import RetryError
+
 from quant_data_platform.clients.alpha_vantage import (
     AlphaVantageClient,
     parse_listing_status_csv,
@@ -155,46 +158,124 @@ def ingest_tiingo_prices_batched(
     with postgres_connection(settings) as conn:
         for start_idx in range(0, len(symbols), batch_size):
             batch_symbols = symbols[start_idx : start_idx + batch_size]
-            payload = client.fetch_batch_daily_prices(batch_symbols, start_date=start_date, end_date=end_date)
-            sleep_for_tiingo(settings.tiingo_throttle_seconds)
-            checksum = upload_json(
-                "tiingo-raw",
-                f"batch_daily_prices/{start_idx:05d}_{date.today().isoformat()}.json",
-                payload,
-                settings,
+            batch_stats = _ingest_tiingo_batch(
+                conn=conn,
+                client=client,
+                symbols=batch_symbols,
+                start_date=start_date,
+                end_date=end_date,
+                settings=settings,
+                batch_key=f"{start_idx:05d}",
             )
-            record_artifact(
-                conn,
-                {
-                    "source": "tiingo",
-                    "dataset": "batch_daily_prices",
-                    "source_key": f"batch_{start_idx:05d}",
-                    "symbol": None,
-                    "cik": None,
-                    "object_key": f"batch_daily_prices/{start_idx:05d}_{date.today().isoformat()}.json",
-                    "payload_sha256": checksum,
-                    "available_at": datetime.now(UTC),
-                    "metadata": {
-                        "symbols": batch_symbols,
-                        "start_date": start_date.isoformat(),
-                        "end_date": end_date.isoformat(),
-                    },
-                },
-            )
-            for symbol, rows in parse_batch_daily_prices(payload).items():
-                price_rows, action_rows = parse_daily_prices(rows, symbol=symbol)
-                upsert_tiingo_daily_prices(conn, price_rows)
-                upsert_tiingo_corporate_actions(conn, action_rows)
-                stats["price_rows"] += len(price_rows)
-                stats["action_rows"] += len(action_rows)
-                stats["symbol_count"] += 1
-            stats["request_count"] += 1
+            stats["price_rows"] += batch_stats["price_rows"]
+            stats["action_rows"] += batch_stats["action_rows"]
+            stats["symbol_count"] += batch_stats["symbol_count"]
+            stats["request_count"] += batch_stats["request_count"]
         conn.commit()
     return stats
 
 
 def _chunked(values: list[str], size: int) -> list[list[str]]:
     return [values[index : index + size] for index in range(0, len(values), size)]
+
+
+def _ingest_tiingo_batch(
+    *,
+    conn,
+    client: TiingoClient,
+    symbols: list[str],
+    start_date: date,
+    end_date: date,
+    settings: Settings,
+    batch_key: str,
+) -> dict[str, int]:
+    if not symbols:
+        return {"price_rows": 0, "action_rows": 0, "symbol_count": 0, "request_count": 0}
+    try:
+        payload = client.fetch_batch_daily_prices(symbols, start_date=start_date, end_date=end_date)
+        sleep_for_tiingo(settings.tiingo_throttle_seconds)
+    except (HTTPError, RetryError) as exc:
+        http_error = _unwrap_http_error(exc)
+        if http_error is not None and http_error.response is not None and http_error.response.status_code == 400 and len(symbols) > 1:
+            midpoint = len(symbols) // 2
+            left_stats = _ingest_tiingo_batch(
+                conn=conn,
+                client=client,
+                symbols=symbols[:midpoint],
+                start_date=start_date,
+                end_date=end_date,
+                settings=settings,
+                batch_key=f"{batch_key}L",
+            )
+            right_stats = _ingest_tiingo_batch(
+                conn=conn,
+                client=client,
+                symbols=symbols[midpoint:],
+                start_date=start_date,
+                end_date=end_date,
+                settings=settings,
+                batch_key=f"{batch_key}R",
+            )
+            return {
+                "price_rows": left_stats["price_rows"] + right_stats["price_rows"],
+                "action_rows": left_stats["action_rows"] + right_stats["action_rows"],
+                "symbol_count": left_stats["symbol_count"] + right_stats["symbol_count"],
+                "request_count": left_stats["request_count"] + right_stats["request_count"],
+            }
+        if http_error is not None and http_error.response is not None and http_error.response.status_code == 400 and len(symbols) == 1:
+            return {"price_rows": 0, "action_rows": 0, "symbol_count": 0, "request_count": 1}
+        raise
+
+    checksum = upload_json(
+        "tiingo-raw",
+        f"batch_daily_prices/{batch_key}_{date.today().isoformat()}.json",
+        payload,
+        settings,
+    )
+    record_artifact(
+        conn,
+        {
+            "source": "tiingo",
+            "dataset": "batch_daily_prices",
+            "source_key": f"batch_{batch_key}",
+            "symbol": None,
+            "cik": None,
+            "object_key": f"batch_daily_prices/{batch_key}_{date.today().isoformat()}.json",
+            "payload_sha256": checksum,
+            "available_at": datetime.now(UTC),
+            "metadata": {
+                "symbols": symbols,
+                "start_date": start_date.isoformat(),
+                "end_date": end_date.isoformat(),
+            },
+        },
+    )
+    price_rows_total = 0
+    action_rows_total = 0
+    symbol_count = 0
+    for symbol, rows in parse_batch_daily_prices(payload).items():
+        price_rows, action_rows = parse_daily_prices(rows, symbol=symbol)
+        upsert_tiingo_daily_prices(conn, price_rows)
+        upsert_tiingo_corporate_actions(conn, action_rows)
+        price_rows_total += len(price_rows)
+        action_rows_total += len(action_rows)
+        symbol_count += 1
+    return {
+        "price_rows": price_rows_total,
+        "action_rows": action_rows_total,
+        "symbol_count": symbol_count,
+        "request_count": 1,
+    }
+
+
+def _unwrap_http_error(exc: HTTPError | RetryError) -> HTTPError | None:
+    if isinstance(exc, HTTPError):
+        return exc
+    if isinstance(exc, RetryError) and exc.last_attempt is not None:
+        last_exc = exc.last_attempt.exception()
+        if isinstance(last_exc, HTTPError):
+            return last_exc
+    return None
 
 
 def ingest_sec_ciks(ciks: Iterable[str], settings: Settings | None = None) -> dict[str, int]:

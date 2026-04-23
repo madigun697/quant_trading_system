@@ -2,7 +2,14 @@ from __future__ import annotations
 
 import json
 
-from quant_data_platform.clients.tiingo import _symbol_candidates, parse_batch_daily_prices, parse_daily_prices
+import requests
+
+from quant_data_platform.clients.tiingo import (
+    _should_retry_tiingo,
+    _symbol_candidates,
+    parse_batch_daily_prices,
+    parse_daily_prices,
+)
 from tests.conftest import FIXTURE_DIR
 
 
@@ -30,3 +37,17 @@ def test_parse_batch_daily_prices_groups_by_ticker() -> None:
     grouped = parse_batch_daily_prices(payload)
     assert list(grouped) == ["AAPL", "MSFT"]
     assert len(grouped["AAPL"]) == 2
+
+
+def test_should_retry_tiingo_for_retryable_status_codes() -> None:
+    response = requests.Response()
+    response.status_code = 429
+    error = requests.HTTPError("rate limit", response=response)
+    assert _should_retry_tiingo(error)
+
+
+def test_should_not_retry_tiingo_for_bad_request() -> None:
+    response = requests.Response()
+    response.status_code = 400
+    error = requests.HTTPError("bad request", response=response)
+    assert not _should_retry_tiingo(error)

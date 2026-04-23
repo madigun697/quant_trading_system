@@ -7,12 +7,18 @@ from typing import Any
 
 import requests
 from requests import HTTPError
-from tenacity import retry, stop_after_attempt, wait_fixed
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_fixed
 
 from quant_data_platform.config import Settings, get_settings
 from quant_data_platform.utils import parse_date
 
 TIINGO_BASE = "https://api.tiingo.com/tiingo/daily"
+
+
+def _should_retry_tiingo(exc: BaseException) -> bool:
+    if isinstance(exc, HTTPError) and exc.response is not None:
+        return exc.response.status_code in {429, 500, 502, 503, 504}
+    return isinstance(exc, requests.RequestException)
 
 
 class TiingoClient:
@@ -28,7 +34,7 @@ class TiingoClient:
             }
         )
 
-    @retry(stop=stop_after_attempt(3), wait=wait_fixed(5))
+    @retry(retry=retry_if_exception(_should_retry_tiingo), stop=stop_after_attempt(3), wait=wait_fixed(5))
     def fetch_daily_prices(
         self,
         symbol: str,
@@ -63,7 +69,7 @@ class TiingoClient:
             raise last_error
         raise ValueError(f"No Tiingo symbol candidate succeeded for {symbol}")
 
-    @retry(stop=stop_after_attempt(3), wait=wait_fixed(10))
+    @retry(retry=retry_if_exception(_should_retry_tiingo), stop=stop_after_attempt(3), wait=wait_fixed(10))
     def fetch_batch_daily_prices(
         self,
         symbols: list[str],

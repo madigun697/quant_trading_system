@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import date, timedelta
 
 ALLOWED_EXCHANGES = {
@@ -24,6 +25,7 @@ BLOCKED_NAME_TERMS = (
 )
 
 BLOCKED_SYMBOL_SUFFIXES = ("W", "WS", "R", "RT", "U", "UN")
+ALLOWED_SYMBOL_PATTERN = re.compile(r"^[A-Z0-9]+([./-][A-Z])?$")
 
 
 def is_allowed_exchange(exchange: str | None) -> bool:
@@ -51,7 +53,11 @@ def is_common_stock_candidate(
     if any(term in upper_name for term in BLOCKED_NAME_TERMS):
         return False
 
-    symbol_base = symbol.upper().replace(".", "-").replace("/", "-")
+    normalized_symbol = symbol.upper().strip()
+    if not ALLOWED_SYMBOL_PATTERN.fullmatch(normalized_symbol):
+        return False
+
+    symbol_base = normalized_symbol.replace(".", "-").replace("/", "-")
     if "-" in symbol_base:
         suffix = symbol_base.rsplit("-", 1)[-1]
         if suffix in BLOCKED_SYMBOL_SUFFIXES:
