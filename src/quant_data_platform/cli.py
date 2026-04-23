@@ -84,3 +84,7 @@ def main() -> None:
         raise ValueError(f"Unsupported command: {args.command}")
 
     print(json.dumps(result, indent=2, default=str))
+
+
+if __name__ == "__main__":
+    main()
