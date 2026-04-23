@@ -95,6 +95,36 @@ create table if not exists raw.alpha_vantage_corporate_actions (
   primary key (symbol, trade_date, action_type)
 );
 
+create table if not exists raw.tiingo_daily_prices (
+  symbol text not null,
+  trade_date date not null,
+  open numeric,
+  high numeric,
+  low numeric,
+  close numeric,
+  adjusted_open numeric,
+  adjusted_high numeric,
+  adjusted_low numeric,
+  adjusted_close numeric,
+  volume bigint,
+  adjusted_volume numeric,
+  dividend_amount numeric,
+  split_coefficient numeric,
+  source text not null default 'tiingo',
+  ingested_at timestamptz not null default now(),
+  primary key (symbol, trade_date)
+);
+
+create table if not exists raw.tiingo_corporate_actions (
+  symbol text not null,
+  trade_date date not null,
+  action_type text not null,
+  action_value numeric,
+  source text not null default 'tiingo',
+  ingested_at timestamptz not null default now(),
+  primary key (symbol, trade_date, action_type)
+);
+
 create table if not exists raw.sec_submissions (
   cik text primary key,
   entity_name text,

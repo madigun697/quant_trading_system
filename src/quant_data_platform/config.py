@@ -21,11 +21,13 @@ class Settings(BaseSettings):
     minio_region: str = Field(default="us-east-1", alias="MINIO_REGION")
 
     alphavantage_api_key: str | None = Field(default=None, alias="ALPHAVANTAGE_API_KEY")
+    tiingo_api_key: str | None = Field(default=None, alias="TIINGO_API_KEY")
     fred_api_key: str | None = Field(default=None, alias="FRED_API_KEY")
     sec_user_agent: str | None = Field(default=None, alias="SEC_USER_AGENT")
 
     prototype_cohort: str = "prototype"
     alpha_vantage_throttle_seconds: float = 15.0
+    tiingo_throttle_seconds: float = 1.0
 
     @property
     def postgres_dsn(self) -> str:

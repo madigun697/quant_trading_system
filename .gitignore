@@ -21,6 +21,7 @@ __pycache__/
 logs/
 target/
 dbt_packages/
+dbt/.user.yml
 
 # Local data volumes
 .data/

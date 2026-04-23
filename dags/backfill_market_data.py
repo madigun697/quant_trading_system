@@ -12,7 +12,7 @@ from quant_data_platform.pipeline import run_market_backfill
     start_date=pendulum.datetime(2024, 1, 1, tz="America/New_York"),
     schedule=None,
     catchup=False,
-    tags=["backfill", "alpha_vantage", "market_data"],
+    tags=["backfill", "tiingo", "market_data"],
 )
 def build_backfill_market_data() -> None:
     @task

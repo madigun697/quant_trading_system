@@ -63,8 +63,11 @@ class AlphaVantageClient:
 
 
 def parse_overview(payload: dict[str, Any], as_of_date: date) -> dict[str, Any]:
+    symbol = payload.get("Symbol")
+    if not symbol:
+        raise ValueError("Alpha Vantage overview payload missing Symbol.")
     return {
-        "symbol": payload.get("Symbol"),
+        "symbol": symbol,
         "as_of_date": as_of_date,
         "cik": _normalize_cik(payload.get("CIK")),
         "name": payload.get("Name"),

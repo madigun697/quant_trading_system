@@ -11,8 +11,8 @@ spy as (
         'SPY' as benchmark_name,
         trade_date as observation_date,
         adjusted_close as value,
-        'alpha_vantage' as source
-    from {{ source('raw', 'alpha_vantage_daily_prices') }}
+        'tiingo' as source
+    from {{ source('raw', 'tiingo_daily_prices') }}
     where symbol = 'SPY'
 )
 select * from fred

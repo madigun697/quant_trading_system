@@ -119,6 +119,49 @@ def upsert_corporate_actions(conn: Connection, rows: Iterable[dict[str, Any]]) -
     _executemany(conn, sql, rows)
 
 
+def upsert_tiingo_daily_prices(conn: Connection, rows: Iterable[dict[str, Any]]) -> None:
+    sql = """
+        insert into raw.tiingo_daily_prices (
+            symbol, trade_date, open, high, low, close, adjusted_open, adjusted_high, adjusted_low,
+            adjusted_close, volume, adjusted_volume, dividend_amount, split_coefficient, source
+        ) values (
+            %(symbol)s, %(trade_date)s, %(open)s, %(high)s, %(low)s, %(close)s, %(adjusted_open)s, %(adjusted_high)s, %(adjusted_low)s,
+            %(adjusted_close)s, %(volume)s, %(adjusted_volume)s, %(dividend_amount)s, %(split_coefficient)s, %(source)s
+        )
+        on conflict (symbol, trade_date) do update set
+            open = excluded.open,
+            high = excluded.high,
+            low = excluded.low,
+            close = excluded.close,
+            adjusted_open = excluded.adjusted_open,
+            adjusted_high = excluded.adjusted_high,
+            adjusted_low = excluded.adjusted_low,
+            adjusted_close = excluded.adjusted_close,
+            volume = excluded.volume,
+            adjusted_volume = excluded.adjusted_volume,
+            dividend_amount = excluded.dividend_amount,
+            split_coefficient = excluded.split_coefficient,
+            source = excluded.source,
+            ingested_at = now()
+    """
+    _executemany(conn, sql, rows)
+
+
+def upsert_tiingo_corporate_actions(conn: Connection, rows: Iterable[dict[str, Any]]) -> None:
+    sql = """
+        insert into raw.tiingo_corporate_actions (
+            symbol, trade_date, action_type, action_value, source
+        ) values (
+            %(symbol)s, %(trade_date)s, %(action_type)s, %(action_value)s, %(source)s
+        )
+        on conflict (symbol, trade_date, action_type) do update set
+            action_value = excluded.action_value,
+            source = excluded.source,
+            ingested_at = now()
+    """
+    _executemany(conn, sql, rows)
+
+
 def upsert_sec_submission(conn: Connection, row: dict[str, Any]) -> None:
     row = _with_jsonb(row, "submission_json")
     with conn.cursor() as cur:

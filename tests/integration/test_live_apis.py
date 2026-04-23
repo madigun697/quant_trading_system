@@ -7,6 +7,7 @@ import pytest
 from quant_data_platform.clients.alpha_vantage import AlphaVantageClient
 from quant_data_platform.clients.fred import FREDClient
 from quant_data_platform.clients.sec import SECClient
+from quant_data_platform.clients.tiingo import TiingoClient
 from quant_data_platform.config import get_settings
 
 
@@ -37,3 +38,10 @@ def test_fred_live() -> None:
     client = FREDClient(get_settings())
     payload = client.fetch_series("DGS3MO")
     assert "observations" in payload
+
+
+def test_tiingo_live() -> None:
+    _skip_if_missing("TIINGO_API_KEY")
+    client = TiingoClient(get_settings())
+    payload = client.fetch_daily_prices("IBM")
+    assert isinstance(payload, list)

@@ -5,27 +5,27 @@ from typing import Iterable
 
 from quant_data_platform.clients.alpha_vantage import (
     AlphaVantageClient,
-    parse_daily_adjusted,
     parse_listing_status_csv,
     parse_overview,
     sleep_for_rate_limit,
 )
 from quant_data_platform.clients.fred import FREDClient, parse_series_observations
 from quant_data_platform.clients.sec import SECClient, parse_companyfacts, parse_filings, parse_submission_summary
+from quant_data_platform.clients.tiingo import TiingoClient, parse_daily_prices, sleep_for_rate_limit as sleep_for_tiingo
 from quant_data_platform.config import Settings, get_settings
 from quant_data_platform.db import (
     fetch_active_fred_series,
     fetch_universe_ciks,
     fetch_universe_symbols,
     record_artifact,
-    upsert_corporate_actions,
-    upsert_daily_prices,
     upsert_fred_series,
     upsert_listing_status,
     upsert_overview,
     upsert_sec_companyfacts,
     upsert_sec_filing_metadata,
     upsert_sec_submission,
+    upsert_tiingo_corporate_actions,
+    upsert_tiingo_daily_prices,
 )
 from quant_data_platform.object_store import upload_json
 from quant_data_platform.storage import postgres_connection
@@ -43,14 +43,18 @@ def ingest_alpha_vantage_listing_status(state: str = "active", settings: Setting
     return len(rows)
 
 
-def ingest_alpha_vantage_symbols(symbols: Iterable[str], settings: Settings | None = None) -> dict[str, int]:
+def ingest_alpha_vantage_overviews(symbols: Iterable[str], settings: Settings | None = None) -> dict[str, int]:
     settings = settings or get_settings()
     client = AlphaVantageClient(settings)
-    stats = {"overview_rows": 0, "price_rows": 0, "action_rows": 0}
+    stats = {"overview_rows": 0}
     with postgres_connection(settings) as conn:
         for symbol in symbols:
             overview_payload = client.fetch_overview(symbol)
             sleep_for_rate_limit(settings.alpha_vantage_throttle_seconds)
+            try:
+                overview_row = parse_overview(overview_payload, as_of_date=date.today())
+            except ValueError:
+                continue
             overview_checksum = upload_json("alphavantage-raw", f"overview/{symbol}/{date.today().isoformat()}.json", overview_payload, settings)
             record_artifact(
                 conn,
@@ -66,29 +70,45 @@ def ingest_alpha_vantage_symbols(symbols: Iterable[str], settings: Settings | No
                     "metadata": {"function": "OVERVIEW"},
                 },
             )
-            upsert_overview(conn, [parse_overview(overview_payload, as_of_date=date.today())])
+            upsert_overview(conn, [overview_row])
             stats["overview_rows"] += 1
+        conn.commit()
+    return stats
 
-            daily_payload = client.fetch_daily_adjusted(symbol)
-            sleep_for_rate_limit(settings.alpha_vantage_throttle_seconds)
-            daily_checksum = upload_json("alphavantage-raw", f"daily_adjusted/{symbol}/{date.today().isoformat()}.json", daily_payload, settings)
+
+def ingest_tiingo_prices(
+    symbols: Iterable[str],
+    start_date: date | None = None,
+    end_date: date | None = None,
+    settings: Settings | None = None,
+) -> dict[str, int]:
+    settings = settings or get_settings()
+    client = TiingoClient(settings)
+    stats = {"price_rows": 0, "action_rows": 0}
+    backfill_start = start_date or date(1960, 1, 1)
+
+    with postgres_connection(settings) as conn:
+        for symbol in symbols:
+            daily_payload = client.fetch_daily_prices(symbol=symbol, start_date=backfill_start, end_date=end_date)
+            sleep_for_tiingo(settings.tiingo_throttle_seconds)
+            daily_checksum = upload_json("tiingo-raw", f"daily_prices/{symbol}/{date.today().isoformat()}.json", daily_payload, settings)
             record_artifact(
                 conn,
                 {
-                    "source": "alpha_vantage",
-                    "dataset": "daily_adjusted",
+                    "source": "tiingo",
+                    "dataset": "daily_prices",
                     "source_key": symbol,
                     "symbol": symbol,
-                    "cik": overview_payload.get("CIK"),
-                    "object_key": f"daily_adjusted/{symbol}/{date.today().isoformat()}.json",
+                    "cik": None,
+                    "object_key": f"daily_prices/{symbol}/{date.today().isoformat()}.json",
                     "payload_sha256": daily_checksum,
                     "available_at": datetime.now(UTC),
-                    "metadata": {"function": "TIME_SERIES_DAILY_ADJUSTED"},
+                    "metadata": {"start_date": backfill_start.isoformat(), "end_date": end_date.isoformat() if end_date else None},
                 },
             )
-            price_rows, action_rows = parse_daily_adjusted(daily_payload, symbol=symbol)
-            upsert_daily_prices(conn, price_rows)
-            upsert_corporate_actions(conn, action_rows)
+            price_rows, action_rows = parse_daily_prices(daily_payload, symbol=symbol)
+            upsert_tiingo_daily_prices(conn, price_rows)
+            upsert_tiingo_corporate_actions(conn, action_rows)
             stats["price_rows"] += len(price_rows)
             stats["action_rows"] += len(action_rows)
         conn.commit()
@@ -181,7 +201,9 @@ def run_market_backfill(symbols: list[str] | None = None, settings: Settings | N
     with postgres_connection(settings) as conn:
         symbols = symbols or fetch_universe_symbols(conn, settings.prototype_cohort)
     ingest_alpha_vantage_listing_status(settings=settings)
-    return ingest_alpha_vantage_symbols(symbols, settings=settings)
+    overview_stats = ingest_alpha_vantage_overviews(symbols, settings=settings)
+    price_stats = ingest_tiingo_prices(symbols, settings=settings)
+    return {**overview_stats, **price_stats}
 
 
 def run_fundamental_backfill(ciks: list[str] | None = None, settings: Settings | None = None) -> dict[str, int]:
@@ -197,8 +219,12 @@ def run_daily_incremental(settings: Settings | None = None) -> dict[str, dict[st
         symbols = fetch_universe_symbols(conn, settings.prototype_cohort)
         ciks = fetch_universe_ciks(conn, settings.prototype_cohort)
         fred_series = fetch_active_fred_series(conn)
+    recent_start = date.today().replace(day=1)
     return {
-        "market": run_market_backfill(symbols=symbols, settings=settings),
+        "market": {
+            **ingest_alpha_vantage_overviews(symbols=symbols, settings=settings),
+            **ingest_tiingo_prices(symbols=symbols, start_date=recent_start, settings=settings),
+        },
         "fundamentals": run_fundamental_backfill(ciks=ciks, settings=settings),
         "fred": ingest_fred_series(fred_series, settings=settings),
     }

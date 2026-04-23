@@ -22,6 +22,11 @@ def test_parse_overview() -> None:
     assert row["sector"] == "Technology"
 
 
+def test_parse_overview_requires_symbol() -> None:
+    with pytest.raises(ValueError):
+        parse_overview({}, as_of_date=date(2025, 1, 15))
+
+
 def test_parse_daily_adjusted() -> None:
     payload = json.loads((FIXTURE_DIR / "alpha_vantage_daily_adjusted.json").read_text())
     price_rows, action_rows = parse_daily_adjusted(payload, symbol="IBM")

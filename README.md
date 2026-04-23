@@ -3,7 +3,7 @@
 무료 기반 미국 주식 백테스트 데이터 파이프라인 프로토타입입니다.
 
 ## 스택
-- Sources: `SEC + Alpha Vantage + FRED`
+- Sources: `SEC + Alpha Vantage + Tiingo + FRED`
 - Storage: `PostgreSQL + MinIO`
 - Transform: `dbt-postgres`
 - Orchestration: `Airflow`
@@ -15,6 +15,9 @@
 
 - `ALPHAVANTAGE_API_KEY`
   - 발급: <https://www.alphavantage.co/support/#api-key>
+- `TIINGO_API_KEY`
+  - 발급: <https://api.tiingo.com/account/api/token>
+  - 안내: <https://www.tiingo.com/kb/article/where-to-find-your-tiingo-api-token/>
 - `FRED_API_KEY`
   - 발급: <https://fredaccount.stlouisfed.org/apikeys>
 - `SEC_USER_AGENT`
@@ -41,7 +44,7 @@ uv run pytest
 키가 준비된 뒤 live integration 테스트:
 
 ```bash
-ALPHAVANTAGE_API_KEY=... FRED_API_KEY=... SEC_USER_AGENT="YourName your@email.com" uv run pytest -m integration
+ALPHAVANTAGE_API_KEY=... TIINGO_API_KEY=... FRED_API_KEY=... SEC_USER_AGENT="YourName your@email.com" uv run pytest -m integration
 ```
 
 Docker 구성 검증:
@@ -54,6 +57,12 @@ docker compose config
 - `backfill_market_data`
 - `backfill_fundamentals`
 - `daily_incremental_pipeline`
+
+## 소스 역할
+- `Alpha Vantage`: listing status, symbol overview
+- `Tiingo`: 장기 일별 가격, 배당, 분할 기반 기업행위
+- `SEC`: filings, companyfacts
+- `FRED`: risk-free series
 
 ## dbt 모델
 - `stg_*`: 원천 정규화
