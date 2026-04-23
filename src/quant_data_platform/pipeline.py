@@ -46,14 +46,15 @@ def ingest_alpha_vantage_listing_status(state: str = "active", settings: Setting
 def ingest_alpha_vantage_overviews(symbols: Iterable[str], settings: Settings | None = None) -> dict[str, int]:
     settings = settings or get_settings()
     client = AlphaVantageClient(settings)
-    stats = {"overview_rows": 0}
+    stats = {"overview_rows": 0, "overview_skipped": 0}
     with postgres_connection(settings) as conn:
         for symbol in symbols:
-            overview_payload = client.fetch_overview(symbol)
-            sleep_for_rate_limit(settings.alpha_vantage_throttle_seconds)
             try:
+                overview_payload = client.fetch_overview(symbol)
+                sleep_for_rate_limit(settings.alpha_vantage_throttle_seconds)
                 overview_row = parse_overview(overview_payload, as_of_date=date.today())
-            except ValueError:
+            except Exception:
+                stats["overview_skipped"] += 1
                 continue
             overview_checksum = upload_json("alphavantage-raw", f"overview/{symbol}/{date.today().isoformat()}.json", overview_payload, settings)
             record_artifact(

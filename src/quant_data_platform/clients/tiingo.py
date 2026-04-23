@@ -6,6 +6,7 @@ from decimal import Decimal
 from typing import Any
 
 import requests
+from requests import HTTPError
 from tenacity import retry, stop_after_attempt, wait_fixed
 
 from quant_data_platform.config import Settings, get_settings
@@ -39,16 +40,28 @@ class TiingoClient:
             params["startDate"] = start_date.isoformat()
         if end_date is not None:
             params["endDate"] = end_date.isoformat()
-        response = self.session.get(
-            f"{TIINGO_BASE}/{symbol}/prices",
-            params=params,
-            timeout=30,
-        )
-        response.raise_for_status()
-        payload = response.json()
-        if isinstance(payload, dict) and payload.get("detail"):
-            raise ValueError(payload["detail"])
-        return payload
+        last_error: Exception | None = None
+        for candidate in _symbol_candidates(symbol):
+            response = self.session.get(
+                f"{TIINGO_BASE}/{candidate}/prices",
+                params=params,
+                timeout=30,
+            )
+            try:
+                response.raise_for_status()
+            except HTTPError as exc:
+                last_error = exc
+                if response.status_code == 404:
+                    continue
+                raise
+            payload = response.json()
+            if isinstance(payload, dict) and payload.get("detail"):
+                last_error = ValueError(payload["detail"])
+                continue
+            return payload
+        if last_error is not None:
+            raise last_error
+        raise ValueError(f"No Tiingo symbol candidate succeeded for {symbol}")
 
 
 def parse_daily_prices(payload: list[dict[str, Any]], symbol: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -120,6 +133,18 @@ def _to_decimal(value: Any) -> Decimal | None:
     if value in (None, "", "None", "null"):
         return None
     return Decimal(str(value))
+
+
+def _symbol_candidates(symbol: str) -> list[str]:
+    candidates = [symbol]
+    if "." in symbol:
+        candidates.append(symbol.replace(".", "-"))
+        candidates.append(symbol.replace(".", "/"))
+    deduped: list[str] = []
+    for candidate in candidates:
+        if candidate not in deduped:
+            deduped.append(candidate)
+    return deduped
 
 
 def sleep_for_rate_limit(seconds: float) -> None:
