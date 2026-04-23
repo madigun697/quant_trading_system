@@ -5,6 +5,7 @@
 ## 스택
 - Sources: `SEC + Alpha Vantage + Tiingo + FRED`
 - Storage: `PostgreSQL + MinIO`
+- DB Web UI: `pgAdmin`
 - Transform: `dbt-postgres`
 - Orchestration: `Airflow`
 - Runtime: `Docker Compose`
@@ -30,9 +31,17 @@
 1. `cp .env.example .env`
 2. `.env`에 API 키와 User-Agent를 입력
 3. `docker compose up --build airflow-init`
-4. `docker compose up -d postgres minio airflow-webserver airflow-scheduler`
+4. `docker compose up -d postgres minio pgadmin airflow-webserver airflow-scheduler`
 5. Airflow UI 접속: <http://localhost:8080>
 6. MinIO Console 접속: <http://localhost:9001>
+7. pgAdmin 접속: <http://localhost:5050>
+
+pgAdmin 기본 로그인 값:
+
+- `PGADMIN_DEFAULT_EMAIL`
+- `PGADMIN_DEFAULT_PASSWORD`
+
+PostgreSQL 서버는 `quant-postgres` 이름으로 자동 등록됩니다.
 
 ## 테스트
 로컬 단위 테스트:
