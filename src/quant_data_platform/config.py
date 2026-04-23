@@ -25,9 +25,15 @@ class Settings(BaseSettings):
     fred_api_key: str | None = Field(default=None, alias="FRED_API_KEY")
     sec_user_agent: str | None = Field(default=None, alias="SEC_USER_AGENT")
 
-    prototype_cohort: str = "prototype"
-    alpha_vantage_throttle_seconds: float = 15.0
-    tiingo_throttle_seconds: float = 1.0
+    prototype_cohort: str = Field(default="prototype", alias="PROTOTYPE_COHORT")
+    default_cohort: str = Field(default="us_liquidity_1000_v1", alias="DEFAULT_COHORT")
+    universe_buffer_cohort: str = Field(default="us_liquidity_1500_buffer_v1", alias="UNIVERSE_BUFFER_COHORT")
+    universe_buffer_size: int = Field(default=1500, alias="UNIVERSE_BUFFER_SIZE")
+    universe_target_size: int = Field(default=1000, alias="UNIVERSE_TARGET_SIZE")
+    liquidity_lookback_days: int = Field(default=60, alias="LIQUIDITY_LOOKBACK_DAYS")
+    liquidity_discovery_days: int = Field(default=90, alias="LIQUIDITY_DISCOVERY_DAYS")
+    alpha_vantage_throttle_seconds: float = Field(default=15.0, alias="ALPHA_VANTAGE_THROTTLE_SECONDS")
+    tiingo_throttle_seconds: float = Field(default=1.0, alias="TIINGO_THROTTLE_SECONDS")
 
     @property
     def postgres_dsn(self) -> str:

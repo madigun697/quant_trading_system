@@ -1,3 +1,5 @@
+{{ config(tags=["mart"]) }}
+
 with returns as (
     select
         p.symbol,
@@ -14,6 +16,10 @@ quality as (
     select
         symbol,
         trade_date,
+        cohort,
+        snapshot_date,
+        liquidity_rank,
+        snapshot_adv60,
         roe,
         gross_margin,
         operating_margin,
@@ -23,6 +29,10 @@ quality as (
 select
     r.symbol,
     r.trade_date,
+    q.cohort,
+    q.snapshot_date,
+    q.liquidity_rank,
+    q.snapshot_adv60,
     q.roe,
     q.gross_margin,
     q.operating_margin,

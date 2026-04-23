@@ -17,7 +17,7 @@ select
     coalesce(o.symbol, s.symbol, r.symbol_alias) as symbol,
     coalesce(o.cik, r.cik) as stable_id_or_cik,
     coalesce(o.exchange, s.exchange, r.exchange) as exchange,
-    o.asset_type as security_type,
+    coalesce(o.asset_type, s.asset_type) as security_type,
     true as primary_listing_flag,
     s.status as active_delisted_status,
     s.ipo_date as listing_date,

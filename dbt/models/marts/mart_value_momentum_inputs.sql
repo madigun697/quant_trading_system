@@ -1,6 +1,6 @@
-with universe as (
-    select symbol from {{ ref('int_universe_snapshots') }}
-),
+{{ config(tags=["mart"]) }}
+
+with
 prices as (
     select
         p.*,
@@ -13,10 +13,20 @@ prices as (
         lag(p.adjusted_close, 252) over (partition by p.symbol order by p.trade_date) as adjusted_close_12m_ago,
         lag(p.adjusted_close, 273) over (partition by p.symbol order by p.trade_date) as adjusted_close_13m_ago
     from {{ ref('stg_daily_prices') }} p
-    join universe u using (symbol)
 ),
 value_inputs as (
-    select symbol, trade_date, pe_ratio, pb_ratio, ev_to_ebitda, fcf_yield, sales_yield
+    select
+        symbol,
+        trade_date,
+        cohort,
+        snapshot_date,
+        liquidity_rank,
+        snapshot_adv60,
+        pe_ratio,
+        pb_ratio,
+        ev_to_ebitda,
+        fcf_yield,
+        sales_yield
     from {{ ref('mart_value_quality_inputs') }}
 )
 select
@@ -24,6 +34,10 @@ select
     prices.trade_date,
     prices.adjusted_close,
     prices.lookback_observations,
+    value_inputs.cohort,
+    value_inputs.snapshot_date,
+    value_inputs.liquidity_rank,
+    value_inputs.snapshot_adv60,
     case
         when prices.lookback_observations >= 273 and prices.adjusted_close_13m_ago is not null and prices.adjusted_close_1m_ago is not null
             then (prices.adjusted_close_1m_ago / nullif(prices.adjusted_close_13m_ago, 0)) - 1

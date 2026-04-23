@@ -1,6 +1,12 @@
+{{ config(tags=["mart"]) }}
+
 with prices as (
     select *
     from {{ ref('stg_daily_prices') }}
+),
+universe as (
+    select *
+    from {{ ref('int_universe_snapshots') }}
 ),
 security_master as (
     select *
@@ -15,6 +21,10 @@ joined as (
         sm.symbol,
         prices.trade_date,
         sm.stable_id_or_cik,
+        universe.cohort,
+        universe.effective_date as snapshot_date,
+        universe.liquidity_rank,
+        universe.adv60 as snapshot_adv60,
         prices.adjusted_close,
         prices.close,
         coalesce(sm.shares_outstanding, fundamentals.weighted_average_shares) as shares_outstanding,
@@ -34,6 +44,10 @@ joined as (
         prices.effective_as_of
     from security_master sm
     join prices on prices.symbol = sm.symbol
+    join universe
+      on universe.symbol = sm.symbol
+     and prices.trade_date >= universe.effective_date
+     and (universe.next_effective_date is null or prices.trade_date < universe.next_effective_date)
     left join fundamentals
         on fundamentals.stable_id_or_cik = sm.stable_id_or_cik
        and fundamentals.available_at <= prices.trade_date
@@ -42,6 +56,10 @@ select
     symbol,
     trade_date,
     stable_id_or_cik,
+    cohort,
+    snapshot_date,
+    liquidity_rank,
+    snapshot_adv60,
     adjusted_close,
     shares_outstanding,
     adjusted_close * shares_outstanding as market_cap,

@@ -13,3 +13,10 @@ def test_postgres_dsn() -> None:
     )
     assert "dbname=quant" in settings.postgres_dsn
     assert "user=user" in settings.postgres_dsn
+
+
+def test_universe_defaults() -> None:
+    settings = Settings()
+    assert settings.default_cohort == "us_liquidity_1000_v1"
+    assert settings.universe_buffer_cohort == "us_liquidity_1500_buffer_v1"
+    assert settings.universe_target_size == 1000

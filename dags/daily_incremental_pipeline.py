@@ -7,6 +7,8 @@ from airflow.operators.bash import BashOperator
 
 from quant_data_platform.pipeline import ingest_alpha_vantage_listing_status, run_daily_incremental
 
+from common import get_default_buffer_cohort, get_default_cohort
+
 
 PROJECT_ROOT = "/opt/airflow/project"
 DBT_PROFILES_DIR = "/opt/airflow/project/dbt"
@@ -25,22 +27,34 @@ def build_daily_incremental_pipeline() -> None:
         return ingest_alpha_vantage_listing_status()
 
     @task
-    def ingest_sources() -> dict[str, dict[str, int]]:
-        return run_daily_incremental()
+    def ingest_sources(cohort: str | None = None) -> dict[str, dict[str, int]]:
+        return run_daily_incremental(cohort=cohort or get_default_cohort())
 
     dbt_staging = BashOperator(
         task_id="dbt_staging",
         bash_command=f"cd {PROJECT_ROOT} && dbt run --project-dir dbt --profiles-dir {DBT_PROFILES_DIR} --select tag:stg tag:int",
+        env={
+            "DBT_UNIVERSE_COHORT": "{{ dag_run.conf.get('cohort', '" + get_default_cohort() + "') if dag_run else '" + get_default_cohort() + "' }}",
+            "DBT_BUFFER_COHORT": "{{ dag_run.conf.get('buffer_cohort', '" + get_default_buffer_cohort() + "') if dag_run else '" + get_default_buffer_cohort() + "' }}",
+        },
     )
 
     dbt_marts = BashOperator(
         task_id="dbt_marts",
         bash_command=f"cd {PROJECT_ROOT} && dbt run --project-dir dbt --profiles-dir {DBT_PROFILES_DIR} --select tag:mart",
+        env={
+            "DBT_UNIVERSE_COHORT": "{{ dag_run.conf.get('cohort', '" + get_default_cohort() + "') if dag_run else '" + get_default_cohort() + "' }}",
+            "DBT_BUFFER_COHORT": "{{ dag_run.conf.get('buffer_cohort', '" + get_default_buffer_cohort() + "') if dag_run else '" + get_default_buffer_cohort() + "' }}",
+        },
     )
 
     dbt_tests = BashOperator(
         task_id="dbt_tests",
         bash_command=f"cd {PROJECT_ROOT} && dbt test --project-dir dbt --profiles-dir {DBT_PROFILES_DIR}",
+        env={
+            "DBT_UNIVERSE_COHORT": "{{ dag_run.conf.get('cohort', '" + get_default_cohort() + "') if dag_run else '" + get_default_cohort() + "' }}",
+            "DBT_BUFFER_COHORT": "{{ dag_run.conf.get('buffer_cohort', '" + get_default_buffer_cohort() + "') if dag_run else '" + get_default_buffer_cohort() + "' }}",
+        },
     )
 
     listing_status = refresh_listing_status()

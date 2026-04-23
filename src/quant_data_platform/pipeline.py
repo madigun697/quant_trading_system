@@ -20,10 +20,18 @@ from quant_data_platform.clients.sec import (
 from quant_data_platform.clients.tiingo import TiingoClient, parse_daily_prices, sleep_for_rate_limit as sleep_for_tiingo
 from quant_data_platform.config import Settings, get_settings
 from quant_data_platform.db import (
+    create_universe_build_run,
     fetch_active_fred_series,
+    fetch_current_liquidity_ranking,
+    fetch_listing_candidates,
+    fetch_monthly_liquidity_snapshots,
+    fetch_monthly_snapshot_coverage,
+    fetch_ranked_universe_symbols,
     fetch_universe_ciks,
     fetch_universe_symbols,
+    finalize_universe_build_run,
     record_artifact,
+    replace_universe_members,
     upsert_fred_series,
     upsert_listing_status,
     upsert_overview,
@@ -33,9 +41,11 @@ from quant_data_platform.db import (
     upsert_sec_ticker_reference,
     upsert_tiingo_corporate_actions,
     upsert_tiingo_daily_prices,
+    upsert_universe_rank_snapshots,
 )
 from quant_data_platform.object_store import upload_json
 from quant_data_platform.storage import postgres_connection
+from quant_data_platform.universe import discovery_start_date, is_common_stock_candidate
 
 
 def ingest_alpha_vantage_listing_status(state: str = "active", settings: Settings | None = None) -> int:
@@ -230,40 +240,269 @@ def ingest_fred_series(series_ids: Iterable[str], settings: Settings | None = No
     return stats
 
 
-def run_market_backfill(symbols: list[str] | None = None, settings: Settings | None = None) -> dict[str, int]:
+def build_liquidity_universe(
+    *,
+    cohort: str | None = None,
+    buffer_cohort: str | None = None,
+    buffer_size: int | None = None,
+    target_size: int | None = None,
+    discovery_days: int | None = None,
+    lookback_days: int | None = None,
+    settings: Settings | None = None,
+) -> dict[str, int]:
     settings = settings or get_settings()
+    cohort = cohort or settings.default_cohort
+    buffer_cohort = buffer_cohort or settings.universe_buffer_cohort
+    buffer_size = buffer_size or settings.universe_buffer_size
+    target_size = target_size or settings.universe_target_size
+    discovery_days = discovery_days or settings.liquidity_discovery_days
+    lookback_days = lookback_days or settings.liquidity_lookback_days
+
+    listing_rows = ingest_alpha_vantage_listing_status(settings=settings)
+    sec_reference = ingest_sec_ticker_reference(settings=settings)
+    snapshot_end = date.today()
+    recent_start = discovery_start_date(snapshot_end, discovery_days)
+
     with postgres_connection(settings) as conn:
-        symbols = symbols or fetch_universe_symbols(conn, settings.prototype_cohort)
-    ingest_alpha_vantage_listing_status(settings=settings)
-    overview_stats = ingest_alpha_vantage_overviews(symbols, settings=settings)
-    price_stats = ingest_tiingo_prices(symbols, settings=settings)
-    return {**overview_stats, **price_stats}
+        build_run_id = create_universe_build_run(
+            conn,
+            cohort=cohort,
+            buffer_cohort=buffer_cohort,
+            params={
+                "target_cohort": cohort,
+                "buffer_cohort": buffer_cohort,
+                "buffer_size": buffer_size,
+                "target_size": target_size,
+                "discovery_days": discovery_days,
+                "lookback_days": lookback_days,
+            },
+        )
+        conn.commit()
+
+    try:
+        with postgres_connection(settings) as conn:
+            candidates = fetch_listing_candidates(conn)
+        candidate_symbols = sorted(
+            {
+                row["symbol"]
+                for row in candidates
+                if is_common_stock_candidate(
+                    symbol=row["symbol"],
+                    exchange=row["exchange"],
+                    asset_type=row.get("asset_type"),
+                    entity_name=row.get("entity_name"),
+                )
+                and row.get("status", "active") == "active"
+            }
+        )
+
+        price_stats = ingest_tiingo_prices(
+            candidate_symbols,
+            start_date=recent_start,
+            end_date=snapshot_end,
+            settings=settings,
+        )
+
+        with postgres_connection(settings) as conn:
+            ranked_rows = fetch_current_liquidity_ranking(
+                conn,
+                candidate_symbols,
+                lookback_days=lookback_days,
+                limit=buffer_size,
+            )
+            if not ranked_rows:
+                raise ValueError("No liquidity-ranked symbols were produced during universe build.")
+            buffer_symbols = [row["symbol"] for row in ranked_rows]
+            buffer_snapshot_date = ranked_rows[0]["snapshot_date"]
+            replace_universe_members(
+                conn,
+                cohort=buffer_cohort,
+                symbols=buffer_symbols,
+                effective_date=buffer_snapshot_date,
+                source="liquidity_build_buffer",
+            )
+            upsert_universe_rank_snapshots(
+                conn,
+                [
+                    {
+                        "snapshot_date": row["snapshot_date"],
+                        "cohort": buffer_cohort,
+                        "symbol": row["symbol"],
+                        "rank": row["liquidity_rank"],
+                        "adv60": row["adv60"],
+                        "eligibility_status": "selected_buffer",
+                        "source": "liquidity_build_recent_scan",
+                    }
+                    for row in ranked_rows
+                ],
+            )
+            conn.commit()
+
+        snapshot_stats = refresh_monthly_universe_snapshots(
+            cohort=cohort,
+            buffer_cohort=buffer_cohort,
+            target_size=target_size,
+            lookback_days=lookback_days,
+            settings=settings,
+        )
+        with postgres_connection(settings) as conn:
+            finalize_universe_build_run(
+                conn,
+                build_run_id=build_run_id,
+                status="success",
+                candidate_count=len(candidate_symbols),
+                buffer_count=len(buffer_symbols),
+                target_count=snapshot_stats["distinct_symbols"],
+                metadata={
+                    "latest_buffer_snapshot_date": buffer_snapshot_date.isoformat(),
+                    "recent_scan_start_date": recent_start.isoformat(),
+                    "recent_scan_end_date": snapshot_end.isoformat(),
+                    "snapshot_count": snapshot_stats["snapshot_count"],
+                },
+            )
+            conn.commit()
+        return {
+            "listing_rows": listing_rows,
+            **sec_reference,
+            "candidate_count": len(candidate_symbols),
+            "buffer_count": len(buffer_symbols),
+            **price_stats,
+            **snapshot_stats,
+        }
+    except Exception:
+        with postgres_connection(settings) as conn:
+            finalize_universe_build_run(conn, build_run_id=build_run_id, status="failed")
+            conn.commit()
+        raise
 
 
-def run_fundamental_backfill(ciks: list[str] | None = None, settings: Settings | None = None) -> dict[str, int]:
+def refresh_monthly_universe_snapshots(
+    *,
+    cohort: str | None = None,
+    buffer_cohort: str | None = None,
+    target_size: int | None = None,
+    lookback_days: int | None = None,
+    settings: Settings | None = None,
+) -> dict[str, int]:
     settings = settings or get_settings()
-    ingest_sec_ticker_reference(settings=settings)
+    cohort = cohort or settings.default_cohort
+    buffer_cohort = buffer_cohort or settings.universe_buffer_cohort
+    target_size = target_size or settings.universe_target_size
+    lookback_days = lookback_days or settings.liquidity_lookback_days
+
     with postgres_connection(settings) as conn:
-        ciks = ciks or fetch_universe_ciks(conn, settings.prototype_cohort)
-    return ingest_sec_ciks(ciks, settings=settings)
+        snapshot_rows = fetch_monthly_liquidity_snapshots(
+            conn,
+            buffer_cohort=buffer_cohort,
+            target_size=target_size,
+            lookback_days=lookback_days,
+        )
+        coverage_rows = fetch_monthly_snapshot_coverage(
+            conn,
+            buffer_cohort=buffer_cohort,
+            target_size=target_size,
+            lookback_days=lookback_days,
+        )
+        distinct_symbols = sorted({row["symbol"] for row in snapshot_rows})
+        if not snapshot_rows:
+            raise ValueError("No monthly liquidity snapshots were produced.")
+        upsert_universe_rank_snapshots(
+            conn,
+            [
+                {
+                    "snapshot_date": row["snapshot_date"],
+                    "cohort": cohort,
+                    "symbol": row["symbol"],
+                    "rank": row["liquidity_rank"],
+                    "adv60": row["adv60"],
+                    "eligibility_status": "selected",
+                    "source": "monthly_liquidity_snapshot",
+                }
+                for row in snapshot_rows
+            ],
+        )
+        replace_universe_members(
+            conn,
+            cohort=cohort,
+            symbols=distinct_symbols,
+            effective_date=max(row["snapshot_date"] for row in snapshot_rows),
+            source="monthly_liquidity_snapshot",
+        )
+        conn.commit()
+    return {
+        "snapshot_count": len({row["snapshot_date"] for row in snapshot_rows}),
+        "snapshot_rows": len(snapshot_rows),
+        "distinct_symbols": len(distinct_symbols),
+        "snapshot_shortfall_months": sum(1 for row in coverage_rows if row["shortfall_count"] > 0),
+    }
 
 
-def run_daily_incremental(settings: Settings | None = None) -> dict[str, dict[str, int]]:
+def run_market_backfill(
+    *,
+    symbols: list[str] | None = None,
+    cohort: str | None = None,
+    stage: str | None = None,
+    mode: str = "full",
+    start_date: date | None = None,
+    end_date: date | None = None,
+    settings: Settings | None = None,
+) -> dict[str, int]:
     settings = settings or get_settings()
+    cohort = cohort or settings.default_cohort
+    snapshot_as_of = end_date or date.today()
+    with postgres_connection(settings) as conn:
+        if symbols is None:
+            if stage and stage != "full":
+                stage_limit = int(stage)
+                symbols = fetch_ranked_universe_symbols(conn, cohort, limit=stage_limit) or fetch_universe_symbols(
+                    conn,
+                    cohort,
+                    snapshot_as_of=snapshot_as_of,
+                    limit=stage_limit,
+                )
+            else:
+                symbols = fetch_universe_symbols(conn, cohort, snapshot_as_of=snapshot_as_of)
+    effective_start = start_date
+    if mode == "recent" and effective_start is None:
+        effective_start = discovery_start_date(snapshot_as_of, settings.liquidity_discovery_days)
+    listing_rows = ingest_alpha_vantage_listing_status(settings=settings)
+    price_stats = ingest_tiingo_prices(symbols, start_date=effective_start, end_date=end_date, settings=settings)
+    return {"listing_rows": listing_rows, "symbol_count": len(symbols), **price_stats}
+
+
+def run_fundamental_backfill(
+    *,
+    ciks: list[str] | None = None,
+    cohort: str | None = None,
+    stage: str | None = None,
+    as_of_date: date | None = None,
+    settings: Settings | None = None,
+) -> dict[str, int]:
+    settings = settings or get_settings()
+    cohort = cohort or settings.default_cohort
+    snapshot_as_of = as_of_date or date.today()
+    sec_reference = ingest_sec_ticker_reference(settings=settings)
+    limit = None if stage in (None, "full") else int(stage)
+    with postgres_connection(settings) as conn:
+        ciks = ciks or fetch_universe_ciks(conn, cohort, snapshot_as_of=snapshot_as_of, limit=limit)
+    return {**sec_reference, "cik_count": len(ciks), **ingest_sec_ciks(ciks, settings=settings)}
+
+
+def run_daily_incremental(*, cohort: str | None = None, settings: Settings | None = None) -> dict[str, dict[str, int]]:
+    settings = settings or get_settings()
+    cohort = cohort or settings.default_cohort
     sec_reference = ingest_sec_ticker_reference(settings=settings)
     with postgres_connection(settings) as conn:
-        symbols = fetch_universe_symbols(conn, settings.prototype_cohort)
-        ciks = fetch_universe_ciks(conn, settings.prototype_cohort)
         fred_series = fetch_active_fred_series(conn)
-    recent_start = date.today().replace(day=1)
+    market_stats = run_market_backfill(cohort=cohort, mode="recent", end_date=date.today(), settings=settings)
+    snapshot_stats = refresh_monthly_universe_snapshots(cohort=cohort, settings=settings)
+    fundamentals_stats = run_fundamental_backfill(cohort=cohort, as_of_date=date.today(), settings=settings)
     return {
-        "market": {
-            **ingest_alpha_vantage_overviews(symbols=symbols, settings=settings),
-            **ingest_tiingo_prices(symbols=symbols, start_date=recent_start, settings=settings),
-        },
+        "market": market_stats,
+        "snapshots": snapshot_stats,
         "fundamentals": {
             **sec_reference,
-            **run_fundamental_backfill(ciks=ciks, settings=settings),
+            **fundamentals_stats,
         },
         "fred": ingest_fred_series(fred_series, settings=settings),
     }

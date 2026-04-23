@@ -6,6 +6,8 @@ from airflow.decorators import dag, task
 
 from quant_data_platform.pipeline import run_fundamental_backfill
 
+from common import get_default_buffer_cohort
+
 
 @dag(
     dag_id="backfill_fundamentals",
@@ -17,14 +19,21 @@ from quant_data_platform.pipeline import run_fundamental_backfill
 def build_backfill_fundamentals() -> None:
     @task
     def backfill(
+        cohort: str | None = None,
+        stage: str | None = None,
         start_date: str | None = None,
         end_date: str | None = None,
         cik_set: list[str] | None = None,
         force_reload: bool = False,
     ) -> dict[str, int]:
-        del start_date, end_date
+        del start_date
         del force_reload
-        return run_fundamental_backfill(ciks=cik_set)
+        return run_fundamental_backfill(
+            ciks=cik_set,
+            cohort=cohort or get_default_buffer_cohort(),
+            stage=stage,
+            as_of_date=pendulum.parse(end_date).date() if end_date else None,
+        )
 
     backfill()
 

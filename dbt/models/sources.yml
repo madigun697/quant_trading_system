@@ -17,4 +17,6 @@ sources:
     schema: meta
     tables:
       - name: universe_members
+      - name: universe_rank_snapshots
+      - name: universe_build_runs
       - name: fred_series_config

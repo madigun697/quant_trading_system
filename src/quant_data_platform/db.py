@@ -8,8 +8,36 @@ from psycopg import Connection
 from psycopg.types.json import Jsonb
 
 
-def fetch_universe_symbols(conn: Connection, cohort: str) -> list[str]:
+def fetch_universe_symbols(
+    conn: Connection,
+    cohort: str,
+    *,
+    snapshot_as_of: date | None = None,
+    limit: int | None = None,
+) -> list[str]:
     with conn.cursor() as cur:
+        if snapshot_as_of is not None:
+            cur.execute(
+                """
+                with latest_snapshot as (
+                    select max(snapshot_date) as snapshot_date
+                    from meta.universe_rank_snapshots
+                    where cohort = %(cohort)s
+                      and snapshot_date <= %(snapshot_as_of)s
+                )
+                select symbol
+                from meta.universe_rank_snapshots
+                where cohort = %(cohort)s
+                  and snapshot_date = (select snapshot_date from latest_snapshot)
+                  and eligibility_status in ('selected', 'selected_buffer')
+                order by rank, symbol
+                limit coalesce(%(limit)s, 2147483647)
+                """,
+                {"cohort": cohort, "snapshot_as_of": snapshot_as_of, "limit": limit},
+            )
+            rows = [row["symbol"] for row in cur.fetchall()]
+            if rows:
+                return rows
         cur.execute(
             """
             select distinct symbol
@@ -17,13 +45,23 @@ def fetch_universe_symbols(conn: Connection, cohort: str) -> list[str]:
             where cohort = %s
               and is_active = true
             order by symbol
+            limit coalesce(%s, 2147483647)
             """,
-            (cohort,),
+            (cohort, limit),
         )
         return [row["symbol"] for row in cur.fetchall()]
 
 
-def fetch_universe_ciks(conn: Connection, cohort: str) -> list[str]:
+def fetch_universe_ciks(
+    conn: Connection,
+    cohort: str,
+    *,
+    snapshot_as_of: date | None = None,
+    limit: int | None = None,
+) -> list[str]:
+    symbols = fetch_universe_symbols(conn, cohort, snapshot_as_of=snapshot_as_of, limit=limit)
+    if not symbols:
+        return []
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -38,25 +76,424 @@ def fetch_universe_ciks(conn: Connection, cohort: str) -> list[str]:
                 from raw.sec_ticker_reference
             )
             select distinct coalesce(o.cik, r.cik) as cik
-            from meta.universe_members u
+            from unnest(%s::text[]) as u(symbol)
             left join latest_overview o
               on o.symbol = u.symbol
              and o.rn = 1
             left join latest_sec_reference r
               on r.symbol_alias = u.symbol
              and r.rn = 1
-            where u.cohort = %s
-              and u.is_active = true
-              and coalesce(o.cik, r.cik) is not null
+            where coalesce(o.cik, r.cik) is not null
               and coalesce(o.asset_type, '') <> 'ETF'
               and coalesce(r.entity_name, '') not ilike '%%ETF%%'
               and coalesce(r.entity_name, '') not ilike '%%TRUST%%'
               and coalesce(r.entity_name, '') not ilike '%%FUND%%'
             order by coalesce(o.cik, r.cik)
             """,
-            (cohort,),
+            (symbols,),
         )
         return [row["cik"] for row in cur.fetchall()]
+
+
+def fetch_listing_candidates(conn: Connection) -> list[dict[str, Any]]:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            with latest_status as (
+                select symbol, name, exchange, asset_type, status, ipo_date, delisting_date,
+                    row_number() over (partition by symbol order by source_file_date desc, ingested_at desc) as rn
+                from raw.alpha_vantage_listing_status
+            ),
+            latest_sec_reference as (
+                select symbol_alias, source_ticker, cik, entity_name, exchange,
+                    row_number() over (partition by symbol_alias order by as_of_date desc, fetched_at desc) as rn
+                from raw.sec_ticker_reference
+            )
+            select
+                coalesce(s.symbol, r.symbol_alias) as symbol,
+                coalesce(s.name, r.entity_name) as entity_name,
+                coalesce(s.exchange, r.exchange) as exchange,
+                s.asset_type,
+                s.status,
+                s.ipo_date,
+                s.delisting_date,
+                r.cik
+            from latest_status s
+            full outer join latest_sec_reference r
+                on s.symbol = r.symbol_alias
+               and r.rn = 1
+            where coalesce(s.rn, 1) = 1
+            """
+        )
+        return [dict(row) for row in cur.fetchall()]
+
+
+def fetch_ranked_universe_symbols(conn: Connection, cohort: str, *, limit: int | None = None) -> list[str]:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            with latest_snapshot as (
+                select max(snapshot_date) as snapshot_date
+                from meta.universe_rank_snapshots
+                where cohort = %s
+            )
+            select symbol
+            from meta.universe_rank_snapshots
+            where cohort = %s
+              and snapshot_date = (select snapshot_date from latest_snapshot)
+              and eligibility_status in ('selected', 'selected_buffer')
+            order by rank, symbol
+            limit coalesce(%s, 2147483647)
+            """,
+            (cohort, cohort, limit),
+        )
+        return [row["symbol"] for row in cur.fetchall()]
+
+
+def fetch_current_liquidity_ranking(
+    conn: Connection,
+    symbols: list[str],
+    *,
+    lookback_days: int,
+    limit: int,
+) -> list[dict[str, Any]]:
+    if not symbols:
+        return []
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            with candidate_symbols as (
+                select unnest(%(symbols)s::text[]) as symbol
+            ),
+            price_base as (
+                select
+                    p.symbol,
+                    p.trade_date,
+                    coalesce(p.adjusted_close, p.close) * coalesce(p.adjusted_volume, p.volume) as dollar_volume
+                from raw.tiingo_daily_prices p
+                join candidate_symbols c using (symbol)
+            ),
+            scored as (
+                select
+                    symbol,
+                    trade_date,
+                    avg(dollar_volume) over (
+                        partition by symbol
+                        order by trade_date
+                        rows between %(lookback_window)s preceding and current row
+                    ) as adv60,
+                    count(*) over (
+                        partition by symbol
+                        order by trade_date
+                        rows between %(lookback_window)s preceding and current row
+                    ) as observations,
+                    row_number() over (partition by symbol order by trade_date desc) as latest_rank
+                from price_base
+            ),
+            latest_scores as (
+                select symbol, trade_date as snapshot_date, adv60, observations
+                from scored
+                where latest_rank = 1
+                  and observations >= %(lookback_days)s
+                  and adv60 is not null
+            ),
+            ranked as (
+                select
+                    snapshot_date,
+                    symbol,
+                    adv60,
+                    observations,
+                    row_number() over (order by adv60 desc nulls last, symbol) as liquidity_rank
+                from latest_scores
+            )
+            select
+                snapshot_date,
+                symbol,
+                adv60,
+                observations,
+                liquidity_rank
+            from ranked
+            where liquidity_rank <= %(limit)s
+            order by liquidity_rank
+            """,
+            {
+                "symbols": symbols,
+                "lookback_days": lookback_days,
+                "lookback_window": lookback_days - 1,
+                "limit": limit,
+            },
+        )
+        return [dict(row) for row in cur.fetchall()]
+
+
+def fetch_monthly_liquidity_snapshots(
+    conn: Connection,
+    *,
+    buffer_cohort: str,
+    target_size: int,
+    lookback_days: int,
+) -> list[dict[str, Any]]:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            with buffer_symbols as (
+                select distinct symbol
+                from meta.universe_members
+                where cohort = %(buffer_cohort)s
+                  and is_active = true
+            ),
+            scored as (
+                select
+                    p.symbol,
+                    p.trade_date,
+                    avg(coalesce(p.adjusted_close, p.close) * coalesce(p.adjusted_volume, p.volume)) over (
+                        partition by p.symbol
+                        order by p.trade_date
+                        rows between %(lookback_window)s preceding and current row
+                    ) as adv60,
+                    count(*) over (
+                        partition by p.symbol
+                        order by p.trade_date
+                        rows between %(lookback_window)s preceding and current row
+                    ) as observations,
+                    row_number() over (
+                        partition by p.symbol, date_trunc('month', p.trade_date)
+                        order by p.trade_date desc
+                    ) as month_end_rank
+                from raw.tiingo_daily_prices p
+                join buffer_symbols b using (symbol)
+            ),
+            eligible_month_ends as (
+                select
+                    trade_date as snapshot_date,
+                    symbol,
+                    adv60,
+                    observations
+                from scored
+                where month_end_rank = 1
+                  and observations >= %(lookback_days)s
+                  and adv60 is not null
+            ),
+            ranked as (
+                select
+                    snapshot_date,
+                    symbol,
+                    adv60,
+                    observations,
+                    row_number() over (
+                        partition by snapshot_date
+                        order by adv60 desc nulls last, symbol
+                    ) as liquidity_rank
+                from eligible_month_ends
+            )
+            select
+                snapshot_date,
+                symbol,
+                adv60,
+                observations,
+                liquidity_rank
+            from ranked
+            where liquidity_rank <= %(target_size)s
+            order by snapshot_date, liquidity_rank
+            """,
+            {
+                "buffer_cohort": buffer_cohort,
+                "target_size": target_size,
+                "lookback_days": lookback_days,
+                "lookback_window": lookback_days - 1,
+            },
+        )
+        return [dict(row) for row in cur.fetchall()]
+
+
+def fetch_monthly_snapshot_coverage(
+    conn: Connection,
+    *,
+    buffer_cohort: str,
+    target_size: int,
+    lookback_days: int,
+) -> list[dict[str, Any]]:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            with buffer_symbols as (
+                select distinct symbol
+                from meta.universe_members
+                where cohort = %(buffer_cohort)s
+                  and is_active = true
+            ),
+            scored as (
+                select
+                    p.symbol,
+                    p.trade_date,
+                    avg(coalesce(p.adjusted_close, p.close) * coalesce(p.adjusted_volume, p.volume)) over (
+                        partition by p.symbol
+                        order by p.trade_date
+                        rows between %(lookback_window)s preceding and current row
+                    ) as adv60,
+                    count(*) over (
+                        partition by p.symbol
+                        order by p.trade_date
+                        rows between %(lookback_window)s preceding and current row
+                    ) as observations,
+                    row_number() over (
+                        partition by p.symbol, date_trunc('month', p.trade_date)
+                        order by p.trade_date desc
+                    ) as month_end_rank
+                from raw.tiingo_daily_prices p
+                join buffer_symbols b using (symbol)
+            )
+            select
+                trade_date as snapshot_date,
+                count(*) filter (where observations >= %(lookback_days)s and adv60 is not null) as eligible_symbols,
+                greatest(
+                    %(target_size)s - count(*) filter (where observations >= %(lookback_days)s and adv60 is not null),
+                    0
+                ) as shortfall_count
+            from scored
+            where month_end_rank = 1
+            group by trade_date
+            order by trade_date
+            """,
+            {
+                "buffer_cohort": buffer_cohort,
+                "target_size": target_size,
+                "lookback_days": lookback_days,
+                "lookback_window": lookback_days - 1,
+            },
+        )
+        return [dict(row) for row in cur.fetchall()]
+
+
+def replace_universe_members(
+    conn: Connection,
+    *,
+    cohort: str,
+    symbols: list[str],
+    effective_date: date,
+    source: str,
+) -> None:
+    with conn.cursor() as cur:
+        if symbols:
+            cur.execute(
+                """
+                update meta.universe_members
+                set is_active = false
+                where cohort = %s
+                  and is_active = true
+                  and not (symbol = any(%s::text[]))
+                """,
+                (cohort, symbols),
+            )
+        else:
+            cur.execute(
+                """
+                update meta.universe_members
+                set is_active = false
+                where cohort = %s
+                  and is_active = true
+                """,
+                (cohort,),
+            )
+    _executemany(
+        conn,
+        """
+        insert into meta.universe_members (
+            symbol, cohort, is_active, effective_date, source
+        ) values (
+            %(symbol)s, %(cohort)s, true, %(effective_date)s, %(source)s
+        )
+        on conflict (symbol, cohort, effective_date) do update set
+            is_active = excluded.is_active,
+            source = excluded.source
+        """,
+        [
+            {
+                "symbol": symbol,
+                "cohort": cohort,
+                "effective_date": effective_date,
+                "source": source,
+            }
+            for symbol in symbols
+        ],
+    )
+
+
+def upsert_universe_rank_snapshots(conn: Connection, rows: Iterable[dict[str, Any]]) -> None:
+    sql = """
+        insert into meta.universe_rank_snapshots (
+            snapshot_date, cohort, symbol, rank, adv60, eligibility_status, source
+        ) values (
+            %(snapshot_date)s, %(cohort)s, %(symbol)s, %(rank)s, %(adv60)s, %(eligibility_status)s, %(source)s
+        )
+        on conflict (snapshot_date, cohort, symbol) do update set
+            rank = excluded.rank,
+            adv60 = excluded.adv60,
+            eligibility_status = excluded.eligibility_status,
+            source = excluded.source,
+            updated_at = now()
+    """
+    _executemany(conn, sql, rows)
+
+
+def create_universe_build_run(
+    conn: Connection,
+    *,
+    cohort: str,
+    buffer_cohort: str,
+    params: dict[str, Any],
+) -> int:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            insert into meta.universe_build_runs (
+                cohort, buffer_cohort, status, params
+            ) values (
+                %(cohort)s, %(buffer_cohort)s, 'running', %(params)s
+            )
+            returning build_run_id
+            """,
+            {
+                "cohort": cohort,
+                "buffer_cohort": buffer_cohort,
+                "params": Jsonb(params),
+            },
+        )
+        return cur.fetchone()["build_run_id"]
+
+
+def finalize_universe_build_run(
+    conn: Connection,
+    *,
+    build_run_id: int,
+    status: str,
+    candidate_count: int | None = None,
+    buffer_count: int | None = None,
+    target_count: int | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            update meta.universe_build_runs
+            set status = %s,
+                completed_at = now(),
+                candidate_count = coalesce(%s, candidate_count),
+                buffer_count = coalesce(%s, buffer_count),
+                target_count = coalesce(%s, target_count),
+                metadata = coalesce(%s, metadata),
+                updated_at = now()
+            where build_run_id = %s
+            """,
+            (
+                status,
+                candidate_count,
+                buffer_count,
+                target_count,
+                Jsonb(metadata) if metadata is not None else None,
+                build_run_id,
+            ),
+        )
 
 
 def upsert_listing_status(conn: Connection, rows: Iterable[dict[str, Any]]) -> None:

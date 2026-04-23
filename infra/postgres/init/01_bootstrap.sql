@@ -20,6 +20,33 @@ create table if not exists meta.universe_members (
   primary key (symbol, cohort, effective_date)
 );
 
+create table if not exists meta.universe_rank_snapshots (
+  snapshot_date date not null,
+  cohort text not null,
+  symbol text not null,
+  rank integer not null,
+  adv60 numeric,
+  eligibility_status text not null,
+  source text not null default 'pipeline',
+  updated_at timestamptz not null default now(),
+  primary key (snapshot_date, cohort, symbol)
+);
+
+create table if not exists meta.universe_build_runs (
+  build_run_id bigserial primary key,
+  cohort text not null,
+  buffer_cohort text not null,
+  status text not null,
+  params jsonb not null default '{}'::jsonb,
+  candidate_count integer,
+  buffer_count integer,
+  target_count integer,
+  metadata jsonb not null default '{}'::jsonb,
+  started_at timestamptz not null default now(),
+  completed_at timestamptz,
+  updated_at timestamptz not null default now()
+);
+
 create table if not exists meta.fred_series_config (
   series_id text primary key,
   description text not null,
