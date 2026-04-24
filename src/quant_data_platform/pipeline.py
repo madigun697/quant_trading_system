@@ -711,7 +711,26 @@ def run_market_backfill(
         }
     listing_rows = ingest_alpha_vantage_listing_status(settings=settings)
     if mode == "recent":
-        price_stats = ingest_tiingo_prices(symbols, start_date=effective_start, end_date=end_date, settings=settings)
+        try:
+            price_stats = ingest_tiingo_prices_batched(
+                symbols=symbols,
+                start_date=effective_start,
+                end_date=end_date or snapshot_as_of,
+                batch_size=settings.tiingo_discovery_batch_size,
+                settings=settings,
+            )
+            price_stats["market_data_fallback"] = 0
+        except (HTTPError, RetryError) as exc:
+            http_error = _unwrap_http_error(exc)
+            if http_error is None or http_error.response is None or http_error.response.status_code != 429:
+                raise
+            price_stats = ingest_yfinance_prices(
+                symbols,
+                start_date=effective_start,
+                end_date=end_date or snapshot_as_of,
+                settings=settings,
+            )
+            price_stats["market_data_fallback"] = 1
     else:
         price_stats = ingest_yfinance_prices(symbols, start_date=effective_start, end_date=end_date, settings=settings)
     return {"listing_rows": listing_rows, "symbol_count": len(symbols), **price_stats}
@@ -774,7 +793,13 @@ def run_daily_incremental(*, cohort: str | None = None, settings: Settings | Non
         fred_series = fetch_active_fred_series(conn)
     market_stats = run_market_backfill(cohort=cohort, mode="recent", end_date=date.today(), settings=settings)
     snapshot_stats = refresh_monthly_universe_snapshots(cohort=cohort, settings=settings)
-    fundamentals_stats = run_fundamental_backfill(cohort=cohort, as_of_date=date.today(), settings=settings)
+    fundamentals_stats = run_fundamental_backfill(
+        cohort=cohort,
+        mode="chunked",
+        as_of_date=date.today(),
+        request_budget=settings.sec_daily_request_budget,
+        settings=settings,
+    )
     return {
         "market": market_stats,
         "snapshots": snapshot_stats,

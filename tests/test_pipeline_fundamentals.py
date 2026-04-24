@@ -3,7 +3,10 @@ from __future__ import annotations
 from contextlib import contextmanager
 from datetime import date
 
-from quant_data_platform.pipeline import run_fundamental_backfill
+import requests
+
+from quant_data_platform.config import Settings
+from quant_data_platform.pipeline import run_daily_incremental, run_fundamental_backfill, run_market_backfill
 
 
 class _DummyConn:
@@ -78,3 +81,100 @@ def test_run_fundamental_backfill_full_uses_all_ciks(monkeypatch) -> None:
     assert result["cik_count"] == 3
     assert result["filings"] == 3
     assert result["facts"] == 9
+
+
+def test_run_daily_incremental_uses_chunked_sec_budget(monkeypatch) -> None:
+    calls: dict[str, object] = {}
+
+    monkeypatch.setattr("quant_data_platform.pipeline.postgres_connection", _fake_postgres_connection)
+    monkeypatch.setattr("quant_data_platform.pipeline.ingest_sec_ticker_reference", lambda settings=None: {"reference_rows": 10})
+    monkeypatch.setattr("quant_data_platform.pipeline.fetch_active_fred_series", lambda conn: ["DGS3MO"])
+    monkeypatch.setattr(
+        "quant_data_platform.pipeline.run_market_backfill",
+        lambda cohort=None, mode=None, end_date=None, settings=None: {"price_rows": 100},
+    )
+    monkeypatch.setattr(
+        "quant_data_platform.pipeline.refresh_monthly_universe_snapshots",
+        lambda cohort=None, settings=None: {"snapshot_rows": 700},
+    )
+
+    def _fake_run_fundamental_backfill(**kwargs):
+        calls.update(kwargs)
+        return {"cik_count": 50, "processed_offset_end": 50, "remaining_ciks": 645, "filings": 123, "facts": 456}
+
+    monkeypatch.setattr("quant_data_platform.pipeline.run_fundamental_backfill", _fake_run_fundamental_backfill)
+    monkeypatch.setattr("quant_data_platform.pipeline.ingest_fred_series", lambda series, settings=None: {"rows": len(series)})
+
+    settings = Settings(SEC_DAILY_REQUEST_BUDGET=50)
+    result = run_daily_incremental(cohort="us_liquidity_700_v1", settings=settings)
+
+    assert calls["cohort"] == "us_liquidity_700_v1"
+    assert calls["mode"] == "chunked"
+    assert calls["request_budget"] == 50
+    assert result["fundamentals"]["cik_count"] == 50
+    assert result["market"]["price_rows"] == 100
+    assert result["snapshots"]["snapshot_rows"] == 700
+
+
+def test_run_market_backfill_recent_uses_batched_tiingo(monkeypatch) -> None:
+    calls: dict[str, object] = {}
+
+    monkeypatch.setattr("quant_data_platform.pipeline.postgres_connection", _fake_postgres_connection)
+    monkeypatch.setattr("quant_data_platform.pipeline.fetch_universe_symbols", lambda conn, cohort, snapshot_as_of=None, limit=None: ["AAPL", "MSFT", "NVDA"])
+    monkeypatch.setattr("quant_data_platform.pipeline.ingest_alpha_vantage_listing_status", lambda settings=None: 123)
+
+    def _fake_ingest_tiingo_prices_batched(**kwargs):
+        calls.update(kwargs)
+        return {"price_rows": 30, "action_rows": 3, "request_count": 1, "symbol_count": 3}
+
+    monkeypatch.setattr("quant_data_platform.pipeline.ingest_tiingo_prices_batched", _fake_ingest_tiingo_prices_batched)
+
+    settings = Settings(TIINGO_DISCOVERY_BATCH_SIZE=200)
+    result = run_market_backfill(
+        cohort="us_liquidity_700_v1",
+        mode="recent",
+        end_date=date(2026, 4, 23),
+        settings=settings,
+    )
+
+    assert calls["symbols"] == ["AAPL", "MSFT", "NVDA"]
+    assert calls["batch_size"] == 200
+    assert result["listing_rows"] == 123
+    assert result["price_rows"] == 30
+    assert result["symbol_count"] == 3
+
+
+def test_run_market_backfill_recent_falls_back_to_yfinance_on_tiingo_429(monkeypatch) -> None:
+    monkeypatch.setattr("quant_data_platform.pipeline.postgres_connection", _fake_postgres_connection)
+    monkeypatch.setattr("quant_data_platform.pipeline.fetch_universe_symbols", lambda conn, cohort, snapshot_as_of=None, limit=None: ["AAPL", "MSFT"])
+    monkeypatch.setattr("quant_data_platform.pipeline.ingest_alpha_vantage_listing_status", lambda settings=None: 123)
+
+    response = requests.Response()
+    response.status_code = 429
+    http_error = requests.HTTPError("rate limit", response=response)
+    def _raise_retry_error(**kwargs):
+        raise http_error
+
+    monkeypatch.setattr("quant_data_platform.pipeline.ingest_tiingo_prices_batched", _raise_retry_error)
+    monkeypatch.setattr(
+        "quant_data_platform.pipeline.ingest_yfinance_prices",
+        lambda symbols, start_date=None, end_date=None, settings=None: {
+            "price_rows": 20,
+            "action_rows": 2,
+            "request_count": 1,
+            "symbol_count": len(list(symbols)),
+            "empty_symbols": 0,
+        },
+    )
+
+    settings = Settings(TIINGO_DISCOVERY_BATCH_SIZE=200)
+    result = run_market_backfill(
+        cohort="us_liquidity_700_v1",
+        mode="recent",
+        end_date=date(2026, 4, 23),
+        settings=settings,
+    )
+
+    assert result["listing_rows"] == 123
+    assert result["price_rows"] == 20
+    assert result["market_data_fallback"] == 1
