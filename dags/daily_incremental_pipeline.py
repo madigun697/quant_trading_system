@@ -12,6 +12,7 @@ from common import get_default_buffer_cohort, get_default_cohort
 
 PROJECT_ROOT = "/opt/airflow/project"
 DBT_PROFILES_DIR = "/opt/airflow/project/dbt"
+DBT_BIN = "/home/airflow/.local/bin/dbt"
 
 
 @dag(
@@ -32,10 +33,7 @@ def build_daily_incremental_pipeline() -> None:
 
     dbt_staging = BashOperator(
         task_id="dbt_staging",
-        bash_command=(
-            f"cd {PROJECT_ROOT} && "
-            f"python -m dbt.cli.main run --project-dir dbt --profiles-dir {DBT_PROFILES_DIR} --select tag:stg tag:int"
-        ),
+        bash_command=f"cd {PROJECT_ROOT} && {DBT_BIN} run --project-dir dbt --profiles-dir {DBT_PROFILES_DIR} --select tag:stg tag:int",
         env={
             "DBT_UNIVERSE_COHORT": "{{ dag_run.conf.get('cohort', '" + get_default_cohort() + "') if dag_run else '" + get_default_cohort() + "' }}",
             "DBT_BUFFER_COHORT": "{{ dag_run.conf.get('buffer_cohort', '" + get_default_buffer_cohort() + "') if dag_run else '" + get_default_buffer_cohort() + "' }}",
@@ -44,10 +42,7 @@ def build_daily_incremental_pipeline() -> None:
 
     dbt_marts = BashOperator(
         task_id="dbt_marts",
-        bash_command=(
-            f"cd {PROJECT_ROOT} && "
-            f"python -m dbt.cli.main run --project-dir dbt --profiles-dir {DBT_PROFILES_DIR} --select tag:mart"
-        ),
+        bash_command=f"cd {PROJECT_ROOT} && {DBT_BIN} run --project-dir dbt --profiles-dir {DBT_PROFILES_DIR} --select tag:mart",
         env={
             "DBT_UNIVERSE_COHORT": "{{ dag_run.conf.get('cohort', '" + get_default_cohort() + "') if dag_run else '" + get_default_cohort() + "' }}",
             "DBT_BUFFER_COHORT": "{{ dag_run.conf.get('buffer_cohort', '" + get_default_buffer_cohort() + "') if dag_run else '" + get_default_buffer_cohort() + "' }}",
@@ -56,7 +51,7 @@ def build_daily_incremental_pipeline() -> None:
 
     dbt_tests = BashOperator(
         task_id="dbt_tests",
-        bash_command=f"cd {PROJECT_ROOT} && python -m dbt.cli.main test --project-dir dbt --profiles-dir {DBT_PROFILES_DIR}",
+        bash_command=f"cd {PROJECT_ROOT} && {DBT_BIN} test --project-dir dbt --profiles-dir {DBT_PROFILES_DIR}",
         env={
             "DBT_UNIVERSE_COHORT": "{{ dag_run.conf.get('cohort', '" + get_default_cohort() + "') if dag_run else '" + get_default_cohort() + "' }}",
             "DBT_BUFFER_COHORT": "{{ dag_run.conf.get('buffer_cohort', '" + get_default_buffer_cohort() + "') if dag_run else '" + get_default_buffer_cohort() + "' }}",

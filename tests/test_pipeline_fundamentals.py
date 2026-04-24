@@ -6,7 +6,12 @@ from datetime import date
 import requests
 
 from quant_data_platform.config import Settings
-from quant_data_platform.pipeline import run_daily_incremental, run_fundamental_backfill, run_market_backfill
+from quant_data_platform.pipeline import (
+    refresh_monthly_universe_snapshots,
+    run_daily_incremental,
+    run_fundamental_backfill,
+    run_market_backfill,
+)
 
 
 class _DummyConn:
@@ -178,3 +183,43 @@ def test_run_market_backfill_recent_falls_back_to_yfinance_on_tiingo_429(monkeyp
     assert result["listing_rows"] == 123
     assert result["price_rows"] == 20
     assert result["market_data_fallback"] == 1
+
+
+def test_refresh_monthly_universe_snapshots_replaces_active_members_with_latest_snapshot(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr("quant_data_platform.pipeline.postgres_connection", _fake_postgres_connection)
+    monkeypatch.setattr(
+        "quant_data_platform.pipeline.fetch_monthly_liquidity_snapshots",
+        lambda conn, buffer_cohort, target_size, lookback_days: [
+            {"snapshot_date": date(2026, 3, 31), "symbol": "AAPL", "liquidity_rank": 1, "adv60": 100},
+            {"snapshot_date": date(2026, 3, 31), "symbol": "MSFT", "liquidity_rank": 2, "adv60": 90},
+            {"snapshot_date": date(2026, 4, 30), "symbol": "AAPL", "liquidity_rank": 1, "adv60": 110},
+            {"snapshot_date": date(2026, 4, 30), "symbol": "NVDA", "liquidity_rank": 2, "adv60": 95},
+        ],
+    )
+    monkeypatch.setattr(
+        "quant_data_platform.pipeline.fetch_monthly_snapshot_coverage",
+        lambda conn, buffer_cohort, target_size, lookback_days: [
+            {"snapshot_date": date(2026, 3, 31), "shortfall_count": 0},
+            {"snapshot_date": date(2026, 4, 30), "shortfall_count": 0},
+        ],
+    )
+    monkeypatch.setattr("quant_data_platform.pipeline.upsert_universe_rank_snapshots", lambda conn, rows: None)
+
+    def _capture_replace(conn, cohort, symbols, effective_date, source):
+        captured["cohort"] = cohort
+        captured["symbols"] = symbols
+        captured["effective_date"] = effective_date
+        captured["source"] = source
+
+    monkeypatch.setattr("quant_data_platform.pipeline.replace_universe_members", _capture_replace)
+
+    result = refresh_monthly_universe_snapshots(cohort="us_liquidity_700_v1")
+
+    assert captured["cohort"] == "us_liquidity_700_v1"
+    assert captured["symbols"] == ["AAPL", "NVDA"]
+    assert captured["effective_date"] == date(2026, 4, 30)
+    assert result["snapshot_count"] == 2
+    assert result["distinct_symbols"] == 3
+    assert result["current_symbol_count"] == 2

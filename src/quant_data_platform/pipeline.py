@@ -624,6 +624,8 @@ def refresh_monthly_universe_snapshots(
         distinct_symbols = sorted({row["symbol"] for row in snapshot_rows})
         if not snapshot_rows:
             raise ValueError("No monthly liquidity snapshots were produced.")
+        latest_snapshot_date = max(row["snapshot_date"] for row in snapshot_rows)
+        latest_symbols = sorted({row["symbol"] for row in snapshot_rows if row["snapshot_date"] == latest_snapshot_date})
         upsert_universe_rank_snapshots(
             conn,
             [
@@ -642,8 +644,8 @@ def refresh_monthly_universe_snapshots(
         replace_universe_members(
             conn,
             cohort=cohort,
-            symbols=distinct_symbols,
-            effective_date=max(row["snapshot_date"] for row in snapshot_rows),
+            symbols=latest_symbols,
+            effective_date=latest_snapshot_date,
             source="monthly_liquidity_snapshot",
         )
         conn.commit()
@@ -651,6 +653,7 @@ def refresh_monthly_universe_snapshots(
         "snapshot_count": len({row["snapshot_date"] for row in snapshot_rows}),
         "snapshot_rows": len(snapshot_rows),
         "distinct_symbols": len(distinct_symbols),
+        "current_symbol_count": len(latest_symbols),
         "snapshot_shortfall_months": sum(1 for row in coverage_rows if row["shortfall_count"] > 0),
     }
 
