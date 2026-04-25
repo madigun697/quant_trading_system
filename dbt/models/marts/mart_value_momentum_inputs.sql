@@ -1,19 +1,34 @@
-{{ config(tags=["mart"]) }}
+{{ config(tags=["mart"], materialized='table') }}
 
-with
-prices as (
+/*
+  mart_value_momentum_inputs
+  ──────────────────────────
+  Value + Momentum 팩터.
+  - Momentum: stg_daily_prices 기반 rolling LAG (윈도우 함수)
+  - Value 팩터: mart_value_quality_inputs (int_prices_universe_daily 기반)
+
+  참고: momentum은 universe 밖 종목의 가격 이력도 필요하므로
+        stg_daily_prices(=raw 전체)를 그대로 사용.
+*/
+
+with prices as (
     select
-        p.*,
+        symbol,
+        trade_date,
+        adjusted_close,
         count(*) over (
-            partition by p.symbol
-            order by p.trade_date
+            partition by symbol
+            order by trade_date
             rows between 272 preceding and current row
-        ) as lookback_observations,
-        lag(p.adjusted_close, 21) over (partition by p.symbol order by p.trade_date) as adjusted_close_1m_ago,
-        lag(p.adjusted_close, 252) over (partition by p.symbol order by p.trade_date) as adjusted_close_12m_ago,
-        lag(p.adjusted_close, 273) over (partition by p.symbol order by p.trade_date) as adjusted_close_13m_ago
-    from {{ ref('stg_daily_prices') }} p
+        )                                                                       as lookback_observations,
+        lag(adjusted_close, 21)  over (partition by symbol order by trade_date) as adjusted_close_1m_ago,
+        lag(adjusted_close, 252) over (partition by symbol order by trade_date) as adjusted_close_12m_ago,
+        lag(adjusted_close, 273) over (partition by symbol order by trade_date) as adjusted_close_13m_ago,
+        lag(adjusted_close, 126) over (partition by symbol order by trade_date) as adjusted_close_6m_ago,
+        lag(adjusted_close, 63)  over (partition by symbol order by trade_date) as adjusted_close_3m_ago
+    from {{ ref('stg_daily_prices') }}
 ),
+
 value_inputs as (
     select
         symbol,
@@ -29,33 +44,41 @@ value_inputs as (
         sales_yield
     from {{ ref('mart_value_quality_inputs') }}
 )
+
 select
-    prices.symbol,
-    prices.trade_date,
-    prices.adjusted_close,
-    prices.lookback_observations,
-    value_inputs.cohort,
-    value_inputs.snapshot_date,
-    value_inputs.liquidity_rank,
-    value_inputs.snapshot_adv60,
+    p.symbol,
+    p.trade_date,
+    p.adjusted_close,
+    p.lookback_observations,
+    v.cohort,
+    v.snapshot_date,
+    v.liquidity_rank,
+    v.snapshot_adv60,
+
+    -- Momentum factors
     case
-        when prices.lookback_observations >= 273 and prices.adjusted_close_13m_ago is not null and prices.adjusted_close_1m_ago is not null
-            then (prices.adjusted_close_1m_ago / nullif(prices.adjusted_close_13m_ago, 0)) - 1
+        when p.lookback_observations >= 273
+             and p.adjusted_close_13m_ago is not null
+             and p.adjusted_close_1m_ago  is not null
+            then (p.adjusted_close_1m_ago / nullif(p.adjusted_close_13m_ago, 0)) - 1
     end as momentum_12_1,
     case
-        when lag(prices.adjusted_close, 126) over (partition by prices.symbol order by prices.trade_date) is not null
-            then (prices.adjusted_close / nullif(lag(prices.adjusted_close, 126) over (partition by prices.symbol order by prices.trade_date), 0)) - 1
+        when p.adjusted_close_6m_ago is not null
+            then (p.adjusted_close / nullif(p.adjusted_close_6m_ago, 0)) - 1
     end as momentum_6m,
     case
-        when lag(prices.adjusted_close, 63) over (partition by prices.symbol order by prices.trade_date) is not null
-            then (prices.adjusted_close / nullif(lag(prices.adjusted_close, 63) over (partition by prices.symbol order by prices.trade_date), 0)) - 1
+        when p.adjusted_close_3m_ago is not null
+            then (p.adjusted_close / nullif(p.adjusted_close_3m_ago, 0)) - 1
     end as momentum_3m,
-    value_inputs.pe_ratio,
-    value_inputs.pb_ratio,
-    value_inputs.ev_to_ebitda,
-    value_inputs.fcf_yield,
-    value_inputs.sales_yield
-from prices
-left join value_inputs
-    on value_inputs.symbol = prices.symbol
-   and value_inputs.trade_date = prices.trade_date
+
+    -- Value factors (from mart_value_quality_inputs)
+    v.pe_ratio,
+    v.pb_ratio,
+    v.ev_to_ebitda,
+    v.fcf_yield,
+    v.sales_yield
+
+from prices p
+left join value_inputs v
+    on v.symbol = p.symbol
+   and v.trade_date = p.trade_date

@@ -1,3 +1,12 @@
+{{ config(
+    tags=["int"],
+    materialized='table',
+    indexes=[
+      {'columns': ['stable_id_or_cik', 'available_at']},
+      {'columns': ['stable_id_or_cik', 'period_end']},
+    ]
+) }}
+
 select
     income.stable_id_or_cik,
     income.accession_number,
