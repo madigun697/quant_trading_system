@@ -114,8 +114,9 @@ def build_daily_incremental_pipeline() -> None:
     snapshots = ingest_snapshots(cohort=cohort_param)
     fundamentals = ingest_fundamentals(cohort=cohort_param)
 
-    # sec_ref 가 완료되면 market/snapshots/fundamentals/fred 모두 병렬 시작
-    (sec_ref, market_data, snapshots, fundamentals) >> ingest_fred_data()
+    # sec_ref 완료 후 market/snapshots/fundamentals/fred 병렬 실행
+    fred_data = ingest_fred_data()
+    (sec_ref, market_data, snapshots, fundamentals) >> fred_data
 
     dbt_env = {
         "DBT_UNIVERSE_COHORT": cohort_param,
@@ -153,7 +154,7 @@ def build_daily_incremental_pipeline() -> None:
     )
 
     # fred 는 마지막 데이터 소스 — dbt 전에 반드시 완료
-    ingest_fred_data() >> dbt_staging >> dbt_marts >> dbt_tests
+    fred_data >> dbt_staging >> dbt_marts >> dbt_tests
 
 
 build_daily_incremental_pipeline()
