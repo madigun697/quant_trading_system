@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import requests
+from tenacity import retry, stop_after_attempt, wait_exponential
 
 from quant_data_platform.config import Settings, get_settings
 from quant_data_platform.utils import parse_date, parse_datetime

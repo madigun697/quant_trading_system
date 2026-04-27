@@ -12,10 +12,10 @@ spy as (
         trade_date as observation_date,
         adjusted_close as value,
         source
-    from {{ source('raw', 'market_daily_prices') }}
+    from {{ ref('stg_daily_prices') }}
     where symbol = 'SPY'
     and effective_as_of = (
-        select max(effective_as_of) from {{ source('raw', 'market_daily_prices') }}
+        select max(effective_as_of) from {{ ref('stg_daily_prices') }}
         where symbol = 'SPY'
     )
 )

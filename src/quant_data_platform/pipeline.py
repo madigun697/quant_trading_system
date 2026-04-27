@@ -724,6 +724,7 @@ def run_market_backfill(
             "remaining_symbols": max(len(ordered_symbols) - next_offset, 0),
             **price_stats,
         }
+    # listing_status: called internally — required for backfill DAGs that do not have a dedicated listing_status task. DAG-level task removed in dag split to avoid duplicate call.
     listing_rows = ingest_alpha_vantage_listing_status(settings=settings)
     if mode == "recent":
         try:

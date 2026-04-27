@@ -64,7 +64,8 @@ create table if not exists raw.ingestion_artifacts (
   payload_sha256 text,
   available_at timestamptz,
   ingested_at timestamptz not null default now(),
-  metadata jsonb not null default '{}'::jsonb
+  metadata jsonb not null default '{}'::jsonb,
+  unique (source, dataset, source_key, available_at)
 );
 
 create table if not exists raw.alpha_vantage_listing_status (
