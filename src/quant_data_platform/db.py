@@ -788,6 +788,8 @@ def record_artifact(conn: Connection, row: dict[str, Any]) -> None:
             ) values (
                 %(source)s, %(dataset)s, %(source_key)s, %(symbol)s, %(cik)s, %(object_key)s, %(payload_sha256)s, %(available_at)s, %(metadata)s
             )
+            on conflict (source, dataset, source_key, available_at)
+            do update set payload_sha256 = excluded.payload_sha256, metadata = excluded.metadata
             """,
             row,
         )

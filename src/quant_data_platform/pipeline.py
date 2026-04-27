@@ -75,12 +75,24 @@ def ingest_alpha_vantage_overviews(symbols: Iterable[str], settings: Settings | 
     settings = settings or get_settings()
     client = AlphaVantageClient(settings)
     stats = {"overview_rows": 0, "overview_skipped": 0}
-    with postgres_connection(settings) as conn:
-        for symbol in symbols:
+    for symbol in symbols:
+        with postgres_connection(settings) as conn:
             try:
                 overview_payload = client.fetch_overview(symbol)
                 sleep_for_rate_limit(settings.alpha_vantage_throttle_seconds)
                 overview_row = parse_overview(overview_payload, as_of_date=date.today())
+            except HTTPError as exc:
+                if exc.response is not None and exc.response.status_code == 429:
+                    # Rate limit → 즉시 중단 (caller 가 retry handled)
+                    raise
+                if exc.response is not None and exc.response.status_code == 404:
+                    # Symbol 없음 → 스킵
+                    stats["overview_skipped"] += 1
+                    continue
+                raise
+            except RetryError:
+                # tenacity retry 모두 실패 → 중단
+                raise
             except Exception:
                 stats["overview_skipped"] += 1
                 continue
@@ -101,7 +113,7 @@ def ingest_alpha_vantage_overviews(symbols: Iterable[str], settings: Settings | 
             )
             upsert_overview(conn, [overview_row])
             stats["overview_rows"] += 1
-        conn.commit()
+            conn.commit()  # per-symbol commit → 부분 실패 시 롤백 범위 최소화
     return stats
 
 

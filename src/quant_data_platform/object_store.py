@@ -8,14 +8,20 @@ from quant_data_platform.config import Settings, get_settings
 from quant_data_platform.storage import make_s3_client
 from quant_data_platform.utils import dump_json_bytes, sha256_payload
 
+_bucket_cache: dict[str, bool] = {}
+
 
 def ensure_bucket(bucket: str, settings: Settings | None = None) -> None:
+    if bucket in _bucket_cache:
+        return
     settings = settings or get_settings()
     client = make_s3_client(settings)
     try:
         client.head_bucket(Bucket=bucket)
+        _bucket_cache[bucket] = True
     except ClientError:
         client.create_bucket(Bucket=bucket)
+        _bucket_cache[bucket] = True
 
 
 def upload_json(bucket: str, object_key: str, payload: Any, settings: Settings | None = None) -> str:

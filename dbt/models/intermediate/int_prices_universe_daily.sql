@@ -63,6 +63,7 @@ universe as (
         liquidity_rank,
         adv60
     from {{ ref('int_universe_snapshots') }}
+    where cohort = '{{ env_var("DBT_UNIVERSE_COHORT") }}'
 ),
 
 /*

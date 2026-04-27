@@ -47,6 +47,7 @@ class SECClient:
         response.raise_for_status()
         return response.json()
 
+    @retry(wait=wait_exponential(multiplier=1, min=4, max=30), stop=stop_after_attempt(5))
     def fetch_companyfacts(self, cik: str) -> dict[str, Any]:
         response = self.session.get(f"{SEC_BASE}/api/xbrl/companyfacts/CIK{cik.zfill(10)}.json", timeout=30)
         response.raise_for_status()
