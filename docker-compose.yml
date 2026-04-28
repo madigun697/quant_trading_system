@@ -202,6 +202,25 @@ services:
       - airflow_logs:/opt/airflow/logs
     command: scheduler
 
+  backtest-web:
+    build:
+      context: .
+      dockerfile: infra/web/Dockerfile
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-quant}
+      POSTGRES_USER: ${POSTGRES_USER:-quant}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-quant}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      DEFAULT_COHORT: ${DEFAULT_COHORT:-us_liquidity_700_v1}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./:/app
+
 volumes:
   pgdata:
   pgadmin_data:

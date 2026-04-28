@@ -1,0 +1,11 @@
+<section class="panel-card">
+  <div class="panel-header">
+    <h2>누적 자산 곡선</h2>
+    <p>Gross와 Net을 함께 보여 거래비용이 결과를 얼마나 깎는지 한눈에 확인합니다.</p>
+  </div>
+  {% if equity_curve_svg %}
+    <div class="chart-frame">{{ equity_curve_svg | safe }}</div>
+  {% else %}
+    <p class="muted-copy">차트를 그릴 데이터가 아직 충분하지 않습니다.</p>
+  {% endif %}
+</section>

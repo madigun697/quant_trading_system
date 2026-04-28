@@ -1,0 +1,17 @@
+<section class="panel-card">
+  <div class="panel-header">
+    <h2>핵심 성과 요약</h2>
+    <p>초보자가 가장 먼저 읽어야 할 숫자만 위에 배치했습니다. 순성과를 먼저 보세요.</p>
+  </div>
+  <div class="kpi-grid">
+    {% for metric in summary_metrics %}
+      <article class="kpi-card {% if metric.key == 'net_total_return' %}kpi-card--featured{% endif %}">
+        <p class="kpi-label">{{ metric.label }}</p>
+        <strong class="kpi-value">{{ metric.value }}</strong>
+        {% if metric.tooltip %}
+          <p class="kpi-tooltip">{{ metric.tooltip }}</p>
+        {% endif %}
+      </article>
+    {% endfor %}
+  </div>
+</section>

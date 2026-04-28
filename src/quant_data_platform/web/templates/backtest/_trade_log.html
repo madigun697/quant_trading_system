@@ -1,0 +1,79 @@
+<section class="log-grid">
+  <section class="panel-card">
+    <div class="panel-header">
+      <h2>리밸런스 요약 로그</h2>
+      <p>매월 몇 개를 갈아탔는지와 비용이 얼마나 들었는지 빠르게 읽는 표입니다.</p>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>신호일</th>
+            <th>체결일</th>
+            <th>선택 종목</th>
+            <th>매도 종목</th>
+            <th>매수 금액</th>
+            <th>매도 금액</th>
+            <th>비용</th>
+            <th>회전율</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in trade_log_summary %}
+            <tr>
+              <td>{{ row.signal_date }}</td>
+              <td>{{ row.execution_date }}</td>
+              <td>{{ row.selected_count }}</td>
+              <td>{{ row.sold_count }}</td>
+              <td>{{ row.buy_notional }}</td>
+              <td>{{ row.sell_notional }}</td>
+              <td>{{ row.fees }}</td>
+              <td>{{ row.turnover }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="panel-card">
+    <div class="panel-header">
+      <h2>상세 체결 로그</h2>
+      <p>종목별 체결 내역을 그대로 보여 주므로 계산이 맞는지 직접 검산할 수 있습니다.</p>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>체결일</th>
+            <th>신호일</th>
+            <th>종목</th>
+            <th>동작</th>
+            <th>수량</th>
+            <th>체결가</th>
+            <th>비용</th>
+            <th>순현금흐름</th>
+            <th>실현손익</th>
+            <th>보유기간</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in trade_log_rows %}
+            <tr>
+              <td>{{ row.execution_date }}</td>
+              <td>{{ row.signal_date }}</td>
+              <td>{{ row.symbol }}</td>
+              <td>{{ row.action }}</td>
+              <td>{{ row.shares }}</td>
+              <td>{{ row.execution_price }}</td>
+              <td>{{ row.fees }}</td>
+              <td>{{ row.net_cash_flow }}</td>
+              <td>{{ row.realized_pnl or '-' }}</td>
+              <td>{{ row.holding_days or '-' }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+</section>

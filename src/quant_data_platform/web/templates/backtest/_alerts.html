@@ -1,0 +1,28 @@
+{% if warnings or data_quality_flags or error_message %}
+  <section class="stacked-alerts">
+    {% if error_message and state == "error" %}
+      <article class="alert alert--danger">
+        <strong>실행 전 확인이 필요합니다</strong>
+        <p>{{ error_message }}</p>
+      </article>
+    {% endif %}
+
+    {% for warning in warnings %}
+      <article class="alert alert--{{ warning.tone }}">
+        <strong>{{ warning.title }}</strong>
+        <p>{{ warning.body }}</p>
+      </article>
+    {% endfor %}
+
+    {% if data_quality_flags %}
+      <article class="alert alert--info">
+        <strong>데이터 품질 메모</strong>
+        <ul>
+          {% for flag in data_quality_flags %}
+            <li>{{ flag }}</li>
+          {% endfor %}
+        </ul>
+      </article>
+    {% endif %}
+  </section>
+{% endif %}

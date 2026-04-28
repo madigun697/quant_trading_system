@@ -1,0 +1,82 @@
+<form method="post" action="/backtest" class="panel-card control-form" data-backtest-form>
+  <div class="panel-header">
+    <h2>입력 설정</h2>
+    <p>설정은 적게, 해석은 쉽게. 첫 버전은 프리셋만 지원합니다.</p>
+  </div>
+
+  {% if field_errors.get('__root__') %}
+    <div class="inline-error">{{ field_errors['__root__'] }}</div>
+  {% endif %}
+
+  <label class="field">
+    <span>전략 프리셋</span>
+    <select name="strategy_preset">
+      {% for preset in preset_options %}
+        <option value="{{ preset.id }}" {% if form_values.strategy_preset == preset.id %}selected{% endif %}>
+          {{ preset.label }}
+        </option>
+      {% endfor %}
+    </select>
+    <small class="field-help">
+      {% for preset in preset_options %}
+        {% if form_values.strategy_preset == preset.id %}
+          {{ preset.description }} · {{ preset.lookback_label }}
+        {% endif %}
+      {% endfor %}
+    </small>
+    {% if field_errors.get('strategy_preset') %}<small class="field-error">{{ field_errors['strategy_preset'] }}</small>{% endif %}
+  </label>
+
+  <div class="field-row">
+    <label class="field">
+      <span>시작일</span>
+      <input type="date" name="start_date" value="{{ form_values.start_date }}">
+      {% if field_errors.get('start_date') %}<small class="field-error">{{ field_errors['start_date'] }}</small>{% endif %}
+    </label>
+    <label class="field">
+      <span>종료일</span>
+      <input type="date" name="end_date" value="{{ form_values.end_date }}">
+      {% if field_errors.get('end_date') %}<small class="field-error">{{ field_errors['end_date'] }}</small>{% endif %}
+    </label>
+  </div>
+
+  <label class="field">
+    <span>초기 자본</span>
+    <input type="number" step="1000" min="1" name="initial_capital" value="{{ form_values.initial_capital }}">
+    <small class="field-help">달러 기준 초기 자본입니다.</small>
+    {% if field_errors.get('initial_capital') %}<small class="field-error">{{ field_errors['initial_capital'] }}</small>{% endif %}
+  </label>
+
+  <label class="field">
+    <span>보유 종목 수 (Top-N)</span>
+    <select name="top_n">
+      {% for option in ['10', '20', '30'] %}
+        <option value="{{ option }}" {% if form_values.top_n == option %}selected{% endif %}>{{ option }}개</option>
+      {% endfor %}
+    </select>
+    <small class="field-help">매월 상위 점수 종목을 동일 비중으로 보유합니다.</small>
+    {% if field_errors.get('top_n') %}<small class="field-error">{{ field_errors['top_n'] }}</small>{% endif %}
+  </label>
+
+  <label class="field">
+    <span>거래비용 프리셋</span>
+    <select name="transaction_cost_preset">
+      {% for option in transaction_cost_options %}
+        <option value="{{ option.id }}" {% if form_values.transaction_cost_preset == option.id %}selected{% endif %}>
+          {{ option.label }}
+        </option>
+      {% endfor %}
+    </select>
+    <small class="field-help">
+      {% for option in transaction_cost_options %}
+        {% if form_values.transaction_cost_preset == option.id %}
+          {{ option.description }}
+        {% endif %}
+      {% endfor %}
+    </small>
+    {% if field_errors.get('transaction_cost_preset') %}<small class="field-error">{{ field_errors['transaction_cost_preset'] }}</small>{% endif %}
+  </label>
+
+  <button type="submit" class="primary-button" data-submit-button>백테스트 실행</button>
+  <p class="loading-note" data-loading-note hidden>전략 후보와 체결 가격을 계산하는 중입니다...</p>
+</form>

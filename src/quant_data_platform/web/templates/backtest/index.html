@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+
+{% block content %}
+  <main class="backtest-page">
+    <section class="hero-card">
+      <div class="hero-copy">
+        <p class="eyebrow">Preset Backtest Runner</p>
+        <h1>초보자도 바로 돌려볼 수 있는 퀀트 백테스트</h1>
+        <p class="hero-description">{{ helper_copy }}</p>
+      </div>
+      <div class="hero-rule">
+        <span>실행 규칙</span>
+        <strong>월말 신호 · 다음 거래일 체결</strong>
+      </div>
+    </section>
+
+    <section class="workspace-grid">
+      <aside class="control-panel">
+        {% include "backtest/_form.html" %}
+      </aside>
+
+      <section class="result-panel" aria-live="polite">
+        {% include "backtest/_alerts.html" %}
+
+        {% if state == "empty" %}
+          <section class="empty-state panel-card">
+            <h2>먼저 프리셋을 골라 실행해 보세요</h2>
+            <p>전략, 기간, 자본, 보유 종목 수, 거래비용만 정하면 같은 화면에서 결과를 확인할 수 있습니다.</p>
+          </section>
+        {% elif state in ["error", "no_data", "insufficient_history"] %}
+          <section class="status-state panel-card">
+            <h2>
+              {% if state == "error" %}입력이나 실행 조건을 다시 확인해 주세요{% endif %}
+              {% if state == "no_data" %}이번 조건에서는 체결 가능한 결과가 없습니다{% endif %}
+              {% if state == "insufficient_history" %}초기 구간의 과거 이력이 부족합니다{% endif %}
+            </h2>
+            <p>{{ error_message }}</p>
+          </section>
+        {% elif state == "loading" %}
+          <section class="status-state panel-card">
+            <h2>백테스트를 계산하는 중입니다</h2>
+            <p>전략 신호, 체결가, 거래비용을 순서대로 계산하고 있습니다.</p>
+          </section>
+        {% else %}
+          {% include "backtest/_kpis.html" %}
+          {% include "backtest/_curve.html" %}
+          {% include "backtest/_trade_log.html" %}
+        {% endif %}
+      </section>
+    </section>
+  </main>
+{% endblock %}
