@@ -20,6 +20,7 @@ def build_backfill_fundamentals() -> None:
     @task
     def backfill(
         cohort: str | None = None,
+        full_universe: bool = False,
         mode: str = "full",
         stage: str | None = None,
         start_date: str | None = None,
@@ -32,6 +33,7 @@ def build_backfill_fundamentals() -> None:
         return run_fundamental_backfill(
             ciks=cik_set,
             cohort=cohort or get_default_buffer_cohort(),
+            full_universe=full_universe,
             mode=mode,
             stage=stage,
             as_of_date=pendulum.parse(end_date).date() if end_date else None,

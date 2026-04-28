@@ -9,8 +9,17 @@ pivoted as (
         period_end,
         filing_date,
         available_at,
-        max(case when concept = 'NetCashProvidedByUsedInOperatingActivities' then value end) as operating_cash_flow,
-        max(case when concept in ('PaymentsToAcquirePropertyPlantAndEquipment', 'CapitalExpendituresIncurredButNotYetPaid') then value end) as capex,
+        max(case when concept in (
+            'NetCashProvidedByUsedInOperatingActivities',
+            'NetCashProvidedByUsedInOperatingActivitiesContinuingOperations',
+            'NetCashProvidedByUsedInContinuingOperations'
+        ) then value end) as operating_cash_flow,
+        max(case when concept in (
+            'PaymentsToAcquirePropertyPlantAndEquipment',
+            'CapitalExpendituresIncurredButNotYetPaid',
+            'PropertyPlantAndEquipmentAdditions',
+            'PaymentsToAcquireProductiveAssets'
+        ) then value end) as capex,
         max(case when concept in ('PaymentsOfDividends', 'PaymentsOfDividendsCommonStock') then value end) as dividends_paid,
         max(case when concept in ('PaymentsForRepurchaseOfCommonStock', 'CommonStockRepurchasedDuringPeriodValue') then value end) as share_repurchases
     from facts

@@ -26,10 +26,23 @@ models:
         tests: [not_null]
       - name: trade_date
         tests: [not_null]
+      - name: cohort
+        tests: [not_null]
 
   - name: mart_quality_lowvol_inputs
     columns:
       - name: symbol
         tests: [not_null]
       - name: trade_date
+        tests: [not_null]
+      - name: cohort
+        tests: [not_null]
+
+  - name: mart_value_quality_inputs
+    columns:
+      - name: symbol
+        tests: [not_null]
+      - name: trade_date
+        tests: [not_null]
+      - name: cohort
         tests: [not_null]

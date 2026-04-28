@@ -88,6 +88,7 @@ POSTGRES_HOST=127.0.0.1 POSTGRES_PORT=55432 uv run uvicorn quant_data_platform.w
 - `backfill_market_data`
 - `backfill_fundamentals`
 - `daily_incremental_pipeline`
+- `build_liquidity_universe`
 
 ## 소스 역할
 - `Alpha Vantage`: listing status, symbol overview
@@ -105,3 +106,55 @@ POSTGRES_HOST=127.0.0.1 POSTGRES_PORT=55432 uv run uvicorn quant_data_platform.w
 - `stg_*`: 원천 정규화
 - `int_*`: point-in-time / total-return / universe 중간계층
 - `mart_*`: 전략별 백테스트 입력 마트
+
+## Mart Coverage Audit
+최근 mart coverage를 점검할 때는 아래 명령을 사용합니다.
+
+```bash
+POSTGRES_HOST=127.0.0.1 POSTGRES_PORT=55432 uv run python -m quant_data_platform.cli audit-mart-coverage --cohort us_liquidity_700_v1
+```
+
+JSON이 필요하면:
+
+```bash
+POSTGRES_HOST=127.0.0.1 POSTGRES_PORT=55432 uv run python -m quant_data_platform.cli audit-mart-coverage --cohort us_liquidity_700_v1 --format json
+```
+
+리포트에는 아래 내용이 포함됩니다.
+
+- `stg/int/mart` row 수, 날짜 범위, distinct entity 수
+- strategy mart의 `cohort` 분포
+- 최신 유니버스 기준 `stable_id_or_cik` 미매핑 / PIT fundamentals 미보유 심볼
+- 최신 `value_quality` factor null profile
+- 최근 월별 fully-eligible symbol 수
+
+## Full-Universe Backfill Runbook
+mart coverage를 실제로 늘릴 때는 아래 순서를 권장합니다.
+
+1. 사전 audit 실행
+2. full-universe fundamentals backfill
+3. full-universe market refresh
+4. universe rebuild
+5. daily/dbt rebuild
+6. 사후 audit 실행
+
+Airflow 경로 예시:
+
+```bash
+docker compose exec airflow-webserver airflow dags trigger backfill_fundamentals --conf '{"full_universe": true, "mode": "full"}'
+docker compose exec airflow-webserver airflow dags trigger backfill_market_data --conf '{"full_universe": true, "mode": "recent"}'
+docker compose exec airflow-webserver airflow dags trigger build_liquidity_universe
+docker compose exec airflow-webserver airflow dags trigger daily_incremental_pipeline
+```
+
+CLI 경로가 필요할 때는 `--full-universe` 플래그를 사용할 수 있습니다.
+
+```bash
+POSTGRES_HOST=127.0.0.1 POSTGRES_PORT=55432 uv run python -m quant_data_platform.cli backfill-fundamentals --full-universe --mode full
+POSTGRES_HOST=127.0.0.1 POSTGRES_PORT=55432 uv run python -m quant_data_platform.cli backfill-market --full-universe --mode recent
+```
+
+주의:
+
+- strategy mart는 여전히 `DBT_UNIVERSE_COHORT` 기준 cohort-clean 데이터를 기본 source로 사용합니다.
+- full-universe backfill은 upstream coverage 확장 목적이며, backtest UI는 cohort-backed marts를 읽습니다.

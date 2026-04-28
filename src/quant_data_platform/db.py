@@ -783,19 +783,53 @@ def record_artifact(conn: Connection, row: dict[str, Any]) -> None:
     with conn.cursor() as cur:
         cur.execute(
             """
-            insert into raw.ingestion_artifacts (
-                source, dataset, source_key, symbol, cik, object_key, payload_sha256, available_at, metadata
-            ) values (
-                %(source)s, %(dataset)s, %(source_key)s, %(symbol)s, %(cik)s, %(object_key)s, %(payload_sha256)s, %(available_at)s, %(metadata)s
-            )
-            on conflict (source, dataset, source_key, available_at)
-            do update set
+            update raw.ingestion_artifacts
+            set
                 payload_sha256 = excluded.payload_sha256,
-                metadata = excluded.metadata
-            where ingestion_artifacts.ingested_at < excluded.ingested_at
+                metadata = excluded.metadata,
+                symbol = excluded.symbol,
+                cik = excluded.cik,
+                object_key = excluded.object_key,
+                ingested_at = now()
+            from (
+                select
+                    %(source)s::text as source,
+                    %(dataset)s::text as dataset,
+                    %(source_key)s::text as source_key,
+                    %(symbol)s::text as symbol,
+                    %(cik)s::text as cik,
+                    %(object_key)s::text as object_key,
+                    %(payload_sha256)s::text as payload_sha256,
+                    %(available_at)s::timestamptz as available_at,
+                    %(metadata)s::jsonb as metadata
+            ) as excluded
+            where raw.ingestion_artifacts.source = excluded.source
+              and raw.ingestion_artifacts.dataset = excluded.dataset
+              and raw.ingestion_artifacts.source_key is not distinct from excluded.source_key
+              and raw.ingestion_artifacts.available_at is not distinct from excluded.available_at
+              and raw.ingestion_artifacts.ingested_at < now()
             """,
             row,
         )
+        if cur.rowcount == 0:
+            cur.execute(
+                """
+                insert into raw.ingestion_artifacts (
+                    source, dataset, source_key, symbol, cik, object_key, payload_sha256, available_at, metadata
+                )
+                select
+                    %(source)s, %(dataset)s, %(source_key)s, %(symbol)s, %(cik)s, %(object_key)s, %(payload_sha256)s, %(available_at)s, %(metadata)s
+                where not exists (
+                    select 1
+                    from raw.ingestion_artifacts
+                    where source = %(source)s
+                      and dataset = %(dataset)s
+                      and source_key is not distinct from %(source_key)s
+                      and available_at is not distinct from %(available_at)s
+                )
+                """,
+                row,
+            )
 
 
 def fetch_active_fred_series(conn: Connection) -> list[str]:

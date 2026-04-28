@@ -79,6 +79,6 @@ select
     v.sales_yield
 
 from prices p
-left join value_inputs v
+join value_inputs v
     on v.symbol = p.symbol
    and v.trade_date = p.trade_date

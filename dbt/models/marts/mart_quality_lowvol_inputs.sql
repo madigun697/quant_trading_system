@@ -31,6 +31,26 @@ with spy_returns as (
     where benchmark_name = 'SPY'
 ),
 
+quality as (
+    select
+        symbol,
+        trade_date,
+        cohort,
+        snapshot_date,
+        liquidity_rank,
+        snapshot_adv60,
+        roe,
+        gross_margin,
+        operating_margin,
+        debt_to_equity
+    from {{ ref('mart_value_quality_inputs') }}
+),
+
+quality_symbols as (
+    select distinct symbol
+    from quality
+),
+
 -- ── Step 2: 종목 수익률 + SPY 수익률 결합 ───────────────────────────────────
 returns as (
     select
@@ -39,6 +59,8 @@ returns as (
         p.daily_log_return,
         s.spy_log_return
     from {{ ref('int_total_return_prices') }} p
+    join quality_symbols qs
+        on qs.symbol = p.symbol
     left join spy_returns s
         on s.trade_date = p.trade_date
 ),
@@ -68,22 +90,6 @@ rolling_windows as (
         w63  as (partition by symbol order by trade_date rows between 62  preceding and current row),
         w126 as (partition by symbol order by trade_date rows between 125 preceding and current row),
         w252 as (partition by symbol order by trade_date rows between 251 preceding and current row)
-),
-
--- ── Step 4: Quality 팩터 ─────────────────────────────────────────────────────
-quality as (
-    select
-        symbol,
-        trade_date,
-        cohort,
-        snapshot_date,
-        liquidity_rank,
-        snapshot_adv60,
-        roe,
-        gross_margin,
-        operating_margin,
-        debt_to_equity
-    from {{ ref('mart_value_quality_inputs') }}
 )
 
 -- ── Final: 조립 ──────────────────────────────────────────────────────────────
@@ -106,6 +112,6 @@ select
     rw.corr_252d * rw.rolling_vol_252d
         / nullif(rw.spy_vol_252d, 0)                                       as beta_252d_optional
 from rolling_windows rw
-left join quality q
+join quality q
     on q.symbol    = rw.symbol
    and q.trade_date = rw.trade_date

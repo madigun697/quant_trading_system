@@ -247,6 +247,37 @@ def _chunked(values: list[str], size: int) -> list[list[str]]:
     return [values[index : index + size] for index in range(0, len(values), size)]
 
 
+def _resolve_full_universe_symbols(conn) -> list[str]:
+    candidates = fetch_listing_candidates(conn)
+    symbols = {
+        row["symbol"].upper().strip()
+        for row in candidates
+        if is_common_stock_candidate(
+            symbol=row.get("symbol"),
+            exchange=row.get("exchange"),
+            asset_type=row.get("asset_type"),
+            entity_name=row.get("entity_name"),
+        )
+    }
+    return sorted(symbols)
+
+
+def _resolve_full_universe_ciks(conn) -> list[str]:
+    candidates = fetch_listing_candidates(conn)
+    ciks = {
+        str(row["cik"]).strip()
+        for row in candidates
+        if row.get("cik")
+        and is_common_stock_candidate(
+            symbol=row.get("symbol"),
+            exchange=row.get("exchange"),
+            asset_type=row.get("asset_type"),
+            entity_name=row.get("entity_name"),
+        )
+    }
+    return sorted(ciks)
+
+
 def _ingest_tiingo_batch(
     *,
     conn,
@@ -349,7 +380,7 @@ def _unwrap_http_error(exc: HTTPError | RetryError) -> HTTPError | None:
 def ingest_sec_ciks(ciks: Iterable[str], settings: Settings | None = None) -> dict[str, int]:
     settings = settings or get_settings()
     client = SECClient(settings)
-    stats = {"filings": 0, "facts": 0}
+    stats = {"filings": 0, "facts": 0, "facts_skipped": 0}
     with postgres_connection(settings) as conn:
         for cik in ciks:
             submissions = client.fetch_submissions(cik)
@@ -372,7 +403,15 @@ def ingest_sec_ciks(ciks: Iterable[str], settings: Settings | None = None) -> di
                 },
             )
 
-            facts = client.fetch_companyfacts(cik)
+            try:
+                facts = client.fetch_companyfacts(cik)
+            except (HTTPError, RetryError) as exc:
+                http_error = _unwrap_http_error(exc)
+                if http_error is not None and http_error.response is not None and http_error.response.status_code == 404:
+                    stats["filings"] += len(filing_rows)
+                    stats["facts_skipped"] += 1
+                    continue
+                raise
             facts_checksum = upload_json("sec-raw", f"companyfacts/{cik}/{date.today().isoformat()}.json", facts, settings)
             record_artifact(
                 conn,
@@ -674,6 +713,7 @@ def run_market_backfill(
     *,
     symbols: list[str] | None = None,
     cohort: str | None = None,
+    full_universe: bool = False,
     stage: str | None = None,
     mode: str = "full",
     start_date: date | None = None,
@@ -687,7 +727,11 @@ def run_market_backfill(
     snapshot_as_of = end_date or date.today()
     with postgres_connection(settings) as conn:
         if symbols is None:
-            if stage and stage != "full":
+            if full_universe:
+                symbols = _resolve_full_universe_symbols(conn)
+                if stage and stage != "full":
+                    symbols = symbols[: int(stage)]
+            elif stage and stage != "full":
                 stage_limit = int(stage)
                 symbols = fetch_ranked_universe_symbols(conn, cohort, limit=stage_limit) or fetch_universe_symbols(
                     conn,
@@ -703,8 +747,15 @@ def run_market_backfill(
     if mode == "chunked":
         request_budget = request_budget or settings.yfinance_batch_size
         with postgres_connection(settings) as conn:
-            ordered_symbols = fetch_ranked_universe_symbols(conn, cohort) or fetch_universe_symbols(conn, cohort, snapshot_as_of=snapshot_as_of)
-            resource_name = f"yfinance_history:{cohort}"
+            if full_universe:
+                ordered_symbols = _resolve_full_universe_symbols(conn)
+            else:
+                ordered_symbols = fetch_ranked_universe_symbols(conn, cohort) or fetch_universe_symbols(
+                    conn,
+                    cohort,
+                    snapshot_as_of=snapshot_as_of,
+                )
+            resource_name = f"yfinance_history:{'full_universe' if full_universe else cohort}"
             offset = 0 if reset_cursor else int(get_ingestion_watermark(conn, source_name="yfinance", resource_name=resource_name) or "0")
             chunk_symbols = ordered_symbols[offset : offset + request_budget]
         price_stats = ingest_yfinance_prices(chunk_symbols, start_date=effective_start, end_date=end_date, settings=settings)
@@ -722,6 +773,7 @@ def run_market_backfill(
             "processed_offset_start": offset,
             "processed_offset_end": next_offset,
             "remaining_symbols": max(len(ordered_symbols) - next_offset, 0),
+            "full_universe": int(full_universe),
             **price_stats,
         }
     # listing_status: called internally — required for backfill DAGs that do not have a dedicated listing_status task. DAG-level task removed in dag split to avoid duplicate call.
@@ -749,13 +801,14 @@ def run_market_backfill(
             price_stats["market_data_fallback"] = 1
     else:
         price_stats = ingest_yfinance_prices(symbols, start_date=effective_start, end_date=end_date, settings=settings)
-    return {"listing_rows": listing_rows, "symbol_count": len(symbols), **price_stats}
+    return {"listing_rows": listing_rows, "symbol_count": len(symbols), "full_universe": int(full_universe), **price_stats}
 
 
 def run_fundamental_backfill(
     *,
     ciks: list[str] | None = None,
     cohort: str | None = None,
+    full_universe: bool = False,
     mode: str = "full",
     stage: str | None = None,
     as_of_date: date | None = None,
@@ -769,10 +822,22 @@ def run_fundamental_backfill(
     sec_reference = ingest_sec_ticker_reference(settings=settings)
     limit = None if stage in (None, "full") else int(stage)
     with postgres_connection(settings) as conn:
-        ordered_ciks = ciks or fetch_universe_ciks(conn, cohort, snapshot_as_of=snapshot_as_of, limit=limit)
+        if ciks is not None:
+            ordered_ciks = ciks
+        elif full_universe:
+            ordered_ciks = _resolve_full_universe_ciks(conn)
+            if limit is not None:
+                ordered_ciks = ordered_ciks[:limit]
+        else:
+            ordered_ciks = fetch_universe_ciks(conn, cohort, snapshot_as_of=snapshot_as_of, limit=limit)
         if mode == "chunked":
             request_budget = request_budget or 25
-            resource_name = f"sec_companyfacts:{cohort if ciks is None else 'adhoc'}"
+            if ciks is not None:
+                resource_name = "sec_companyfacts:adhoc"
+            elif full_universe:
+                resource_name = "sec_companyfacts:full_universe"
+            else:
+                resource_name = f"sec_companyfacts:{cohort}"
             offset = 0 if reset_cursor else int(get_ingestion_watermark(conn, source_name="sec", resource_name=resource_name) or "0")
             chunk_ciks = ordered_ciks[offset : offset + request_budget]
         else:
@@ -796,9 +861,10 @@ def run_fundamental_backfill(
             "processed_offset_start": offset,
             "processed_offset_end": next_offset,
             "remaining_ciks": max(len(ordered_ciks) - next_offset, 0),
+            "full_universe": int(full_universe),
             **stats,
         }
-    return {**sec_reference, "cik_count": len(chunk_ciks), **stats}
+    return {**sec_reference, "cik_count": len(chunk_ciks), "full_universe": int(full_universe), **stats}
 
 
 def run_daily_incremental(*, cohort: str | None = None, settings: Settings | None = None) -> dict[str, dict[str, int]]:

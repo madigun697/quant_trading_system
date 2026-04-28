@@ -20,6 +20,7 @@ def build_backfill_market_data() -> None:
     @task
     def backfill(
         cohort: str | None = None,
+        full_universe: bool = False,
         stage: str | None = None,
         mode: str = "full",
         start_date: str | None = None,
@@ -33,6 +34,7 @@ def build_backfill_market_data() -> None:
         return run_market_backfill(
             symbols=symbol_set,
             cohort=cohort or get_default_buffer_cohort(),
+            full_universe=full_universe,
             stage=stage,
             mode=mode,
             start_date=pendulum.parse(start_date).date() if start_date else None,

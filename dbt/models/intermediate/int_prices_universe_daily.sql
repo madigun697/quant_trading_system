@@ -20,20 +20,20 @@
   포함 연산:
   1. security_master + prices  → equi-join (symbol), hash join 가능 [42K × 13.4M]
   2. + universe                → symbol equi-join 후 날짜 범위 필터  [× 284K]
-  3. + fundamentals            → 월별 pre-aggregation 후 equi-join (as-of-month 패턴)
-                                  → LATERAL row-by-row scan 대신 equi-join 사용
+  3. + fundamentals            → stable_id_or_cik + available_at range join
 
   mart_value_quality_inputs, mart_quality_lowvol_inputs,
   mart_value_momentum_inputs 이 세 모델 모두 이 테이블에서 참조한다.
 
-  ── 최적화 전략 ───────────────────────────────────────────────────────────────
-  LATERAL + LIMIT 1 패턴은 정확하지만, 인덱스 없이 joined CTE의 모든 행마다
-  sequential scan을 수행해 매우 느리다.
-  
-  대안: fundamentals를 (stable_id_or_cik, year_month) 단위로 먼저 집계한 뒤,
-  trade_date의 year_month로 equi-join한다.
-  → 재무 데이터는 분기 보고이므로 동일 월 내 최신 1건이 실질적으로 유일.
-  → equi-join → hash join 가능 → 수십 배 빠름.
+  ── PIT 정합성 메모 ─────────────────────────────────────────────────────────
+  이전 구현은 available_at 월 단위로 latest row 하나만 남겨 as-of-month join을 했기 때문에
+  같은 달의 late filing이 월 초 거래일에 유입되는 lookahead 위험과 coverage 축소가 있었다.
+
+  새 구현은:
+    - 같은 available_at timestamp 에 중복 filing 이 있으면 non-null 필드가 가장 많은 1건 선택
+    - lead(available_at)로 다음 유효 시작일을 계산
+    - trade_date가 [available_date, next_available_date) 범위에 있는 row를 조인
+  하여 point-in-time 보장을 유지하면서 coverage를 높인다.
 */
 
 with security_master as (
@@ -66,37 +66,58 @@ universe as (
     where cohort = '{{ env_var("DBT_UNIVERSE_COHORT") }}'
 ),
 
-/*
-  fundamentals를 (stable_id_or_cik, available_month) 단위로 집계.
-
-  목표: trade_date의 year_month로 equi-join할 수 있도록 준비.
-  
-  "as-of-month" 패턴:
-    - available_at ≤ trade_date 인 가장 최근의 재무 데이터를 사용.
-    - LATERAL 대신, 각 월에 "그 시점까지 이용 가능한 최신" 재무 데이터를
-      미리 계산해 둔다.
-    - 재무 데이터는 분기 보고이므로, 동일 월 내 latest 1건만 남겨도 충분함.
-  
-  구현:
-    1. DISTINCT ON (stable_id_or_cik, year_month): 동일 월에 여러 공시가 있으면
-       가장 늦은 available_at 1건만 유지.
-    2. 이 결과에서 trade_date의 year_month ≤ available_month 인 최근 열을
-       JOIN 시 range로 찾아야 하는 문제가 남는다.
-       
-  → 더 나은 해결: generate_series로 월별 스파인 생성 후 fill-forward.
-  → PostgreSQL에서는 "last_value(... IGNORE NULLS)" 미지원이라
-    window + DISTINCT ON 조합을 쓴다.
-    
-  실용적 접근 (퀀트에서 검증된 패턴):
-    - `report_month` = date_trunc('month', available_at)
-    - `trade_month`  = date_trunc('month', trade_date)
-    - trade_month >= report_month 인 조건으로 join 후 MAX(report_month) 기준 선택
-    → 대용량에서 hash join 가능 + 정확한 point-in-time 보장
-*/
-fundamentals_by_month as (
-    select distinct on (stable_id_or_cik, date_trunc('month', available_at))
+fundamentals_ranked as (
+    select
         stable_id_or_cik,
-        date_trunc('month', available_at)::date as report_month,
+        accession_number,
+        period_end,
+        filing_date,
+        available_at,
+        weighted_average_shares,
+        net_income,
+        total_equity,
+        total_assets,
+        gross_profit,
+        operating_income,
+        ebitda,
+        revenue,
+        cash_and_equivalents,
+        short_term_debt,
+        long_term_debt,
+        operating_cash_flow,
+        capex,
+        interest_expense,
+        row_number() over (
+            partition by stable_id_or_cik, available_at
+            order by
+                (
+                    (weighted_average_shares is not null)::int
+                    + (net_income is not null)::int
+                    + (total_equity is not null)::int
+                    + (total_assets is not null)::int
+                    + (gross_profit is not null)::int
+                    + (operating_income is not null)::int
+                    + (ebitda is not null)::int
+                    + (revenue is not null)::int
+                    + (cash_and_equivalents is not null)::int
+                    + (short_term_debt is not null)::int
+                    + (long_term_debt is not null)::int
+                    + (operating_cash_flow is not null)::int
+                    + (capex is not null)::int
+                    + (interest_expense is not null)::int
+                ) desc,
+                filing_date desc,
+                accession_number desc
+        ) as same_timestamp_rank
+    from {{ ref('int_point_in_time_fundamentals') }}
+),
+
+fundamentals_timeline as (
+    select
+        stable_id_or_cik,
+        accession_number,
+        period_end,
+        filing_date,
         available_at,
         weighted_average_shares,
         net_income,
@@ -112,13 +133,39 @@ fundamentals_by_month as (
         operating_cash_flow,
         capex,
         interest_expense
-    from {{ ref('int_point_in_time_fundamentals') }}
-    order by stable_id_or_cik, date_trunc('month', available_at), available_at desc
+    from fundamentals_ranked
+    where same_timestamp_rank = 1
 ),
 
-/*
-  Step 1: prices × security_master (작은 테이블 먼저 → hash join, 중복 제거 포함)
-*/
+fundamentals_periods as (
+    select
+        stable_id_or_cik,
+        accession_number,
+        period_end,
+        filing_date,
+        available_at,
+        available_at::date as available_date,
+        lead(available_at::date) over (
+            partition by stable_id_or_cik
+            order by available_at, filing_date, accession_number
+        ) as next_available_date,
+        weighted_average_shares,
+        net_income,
+        total_equity,
+        total_assets,
+        gross_profit,
+        operating_income,
+        ebitda,
+        revenue,
+        cash_and_equivalents,
+        short_term_debt,
+        long_term_debt,
+        operating_cash_flow,
+        capex,
+        interest_expense
+    from fundamentals_timeline
+),
+
 prices_enriched as (
     select *
     from (
@@ -130,7 +177,6 @@ prices_enriched as (
             p.adjusted_close,
             p.close,
             p.effective_as_of,
-            date_trunc('month', p.trade_date)::date as trade_month,
             row_number() over (
                 partition by sm.symbol, p.trade_date
                 order by sm.shares_outstanding nulls last
@@ -142,53 +188,24 @@ prices_enriched as (
     where rn = 1
 ),
 
-/*
-  Step 2: + universe (symbol equi-join → hash join 후 날짜 range 필터)
-  universe는 월별 스냅샷(284K)이므로 symbol당 몇 건만 존재 → Nested Loop 범위 작음.
-*/
 joined as (
     select
         pe.symbol,
         pe.stable_id_or_cik,
         pe.shares_outstanding,
         pe.trade_date,
-        pe.trade_month,
         pe.adjusted_close,
         pe.close,
         pe.effective_as_of,
         u.cohort,
-        u.effective_date  as snapshot_date,
+        u.effective_date as snapshot_date,
         u.liquidity_rank,
-        u.adv60           as snapshot_adv60
+        u.adv60 as snapshot_adv60
     from prices_enriched pe
     join universe u
         on u.symbol = pe.symbol
        and pe.trade_date >= u.effective_date
        and (u.next_effective_date is null or pe.trade_date < u.next_effective_date)
-),
-
-/*
-  Step 3: + fundamentals (as-of-month 패턴, equi-join 가능)
-
-  trade_month로 "그 시점까지의 최신" 재무 데이터를 찾는다:
-    1. joined.trade_month >= fundamentals_by_month.report_month  (미래 데이터 제외)
-    2. 여러 report_month 중 가장 최신(MAX)을 선택 → GROUP BY + MAX 후 재join
-  
-  이렇게 하면:
-    - hash join on (stable_id_or_cik, report_month) 가능
-    - LATERAL row-by-row 스캔 완전히 제거
-*/
-latest_report_month as (
-    select
-        j.symbol,
-        j.trade_date,
-        j.stable_id_or_cik,
-        max(f.report_month) as latest_report_month
-    from joined j
-    join fundamentals_by_month f
-        on f.stable_id_or_cik = j.stable_id_or_cik
-       and f.report_month <= j.trade_month
-    group by j.symbol, j.trade_date, j.stable_id_or_cik
 ),
 
 final as (
@@ -203,6 +220,7 @@ final as (
         j.adjusted_close,
         j.close,
         j.effective_as_of,
+        f.available_at as fundamentals_available_at,
         coalesce(j.shares_outstanding, f.weighted_average_shares) as shares_outstanding,
         f.net_income,
         f.total_equity,
@@ -218,12 +236,10 @@ final as (
         f.capex,
         f.interest_expense
     from joined j
-    left join latest_report_month lrm
-        on lrm.symbol    = j.symbol
-       and lrm.trade_date = j.trade_date
-    left join fundamentals_by_month f
+    left join fundamentals_periods f
         on f.stable_id_or_cik = j.stable_id_or_cik
-       and f.report_month     = lrm.latest_report_month
+       and j.trade_date >= f.available_date
+       and (f.next_available_date is null or j.trade_date < f.next_available_date)
 )
 
 select * from final

@@ -35,7 +35,7 @@ select
     ((adjusted_close * shares_outstanding)
         + coalesce(short_term_debt, 0)
         + coalesce(long_term_debt, 0)
-        - coalesce(cash_and_equivalents, 0)) / nullif(ebitda, 0)                                                   as ev_to_ebitda,
+        - coalesce(cash_and_equivalents, 0)) / nullif(coalesce(ebitda, operating_income), 0)                      as ev_to_ebitda,
     (coalesce(operating_cash_flow, 0) - coalesce(capex, 0))
         / nullif(adjusted_close * shares_outstanding, 0)                                                           as fcf_yield,
     revenue / nullif(adjusted_close * shares_outstanding, 0)                                                       as sales_yield,
