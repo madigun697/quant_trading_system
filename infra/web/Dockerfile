@@ -9,9 +9,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     UV_PROJECT_ENVIRONMENT=/usr/local
 
 COPY pyproject.toml uv.lock ./
+COPY src ./src
 RUN uv sync --locked --no-dev
 
-COPY src ./src
 COPY dbt ./dbt
 COPY .env.example ./
 

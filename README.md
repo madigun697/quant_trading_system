@@ -38,6 +38,7 @@
 5. Airflow UI 접속: <http://localhost:8080>
 6. MinIO Console 접속: <http://localhost:9001>
 7. pgAdmin 접속: <http://localhost:5050>
+8. PostgreSQL host 포트: `localhost:55432`
 
 pgAdmin 기본 로그인 값:
 
@@ -63,6 +64,24 @@ Docker 구성 검증:
 
 ```bash
 docker compose config
+```
+
+## 백테스트 웹 실행
+권장 경로는 Docker입니다.
+
+Docker로 실행:
+
+```bash
+docker compose up -d postgres backtest-web
+```
+
+- 앱: <http://localhost:8000/backtest>
+- readiness: <http://localhost:8000/healthz>
+
+로컬 `uv run`으로 실행할 때는 네이티브 Postgres와 충돌하지 않도록 compose Postgres 포트를 명시적으로 사용합니다.
+
+```bash
+POSTGRES_HOST=127.0.0.1 POSTGRES_PORT=55432 uv run uvicorn quant_data_platform.web.app:app --reload
 ```
 
 ## DAG

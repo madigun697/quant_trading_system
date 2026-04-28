@@ -110,6 +110,7 @@ class BacktestPageContext(BaseModel):
     equity_curve_svg: str | None = None
     page_title: str = "프리셋 백테스트"
     helper_copy: str = "월말 신호를 보고 다음 거래일에 체결하는 초보자용 프리셋 백테스트입니다."
+    http_status_code: int = 200
 
 
 def form_values_from_model(form: BacktestFormInput) -> dict[str, str]:
@@ -142,4 +143,3 @@ def field_errors_from_validation_error(exc: ValidationError) -> dict[str, str]:
         if key not in errors:
             errors[str(key)] = error.get("msg", "입력값을 확인해 주세요.")
     return errors
-

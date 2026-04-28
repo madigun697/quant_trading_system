@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from collections import OrderedDict
+from collections import OrderedDict, defaultdict
 from datetime import date, timedelta
 from decimal import Decimal
 from html import escape
 from typing import Any
 
+import psycopg
 from quant_data_platform.web.presets import (
-    STRATEGY_PRESETS,
     TRANSACTION_COST_BPS,
     StrategyPresetId,
     TransactionCostPreset,
@@ -15,7 +15,7 @@ from quant_data_platform.web.presets import (
     list_cost_options,
     list_preset_options,
 )
-from quant_data_platform.web.repositories.backtest_repo import BacktestRepository
+from quant_data_platform.web.repositories.backtest_repo import BacktestRepository, ReadinessStatus
 from quant_data_platform.web.schemas import (
     BacktestFormInput,
     BacktestPageContext,
@@ -27,7 +27,13 @@ from quant_data_platform.web.schemas import (
     WarningMessage,
     form_values_from_model,
 )
-from quant_data_platform.web.services.engine import SimulationResult, simulate_backtest
+from quant_data_platform.web.services.engine import (
+    SimulationResult,
+    execution_schedule,
+    month_end_signal_dates,
+    select_top_candidates,
+    simulate_backtest,
+)
 
 
 def _format_currency(value: Decimal | float | int) -> str:
@@ -119,6 +125,9 @@ class BacktestPageService:
         self.repository = repository
         self._cache = SimpleLruCache()
 
+    def readiness_status(self) -> ReadinessStatus:
+        return self.repository.check_readiness(StrategyPresetId.VALUE_QUALITY)
+
     def empty_context(self, today: date | None = None) -> BacktestPageContext:
         default_form = BacktestFormInput(
             strategy_preset=StrategyPresetId.VALUE_QUALITY,
@@ -135,7 +144,13 @@ class BacktestPageService:
             transaction_cost_options=list_cost_options(),
         )
 
-    def error_context(self, form: BacktestFormInput | None, message: str, field_errors: dict[str, str] | None = None) -> BacktestPageContext:
+    def error_context(
+        self,
+        form: BacktestFormInput | None,
+        message: str,
+        field_errors: dict[str, str] | None = None,
+        http_status_code: int = 400,
+    ) -> BacktestPageContext:
         base_form = form_values_from_model(form) if form else self.empty_context().form_values
         return BacktestPageContext(
             state=PageState.ERROR,
@@ -144,59 +159,110 @@ class BacktestPageService:
             transaction_cost_options=list_cost_options(),
             error_message=message,
             field_errors=field_errors or {},
+            http_status_code=http_status_code,
         )
 
     def build_context(self, form: BacktestFormInput) -> BacktestPageContext:
-        freshness_token = self.repository.fetch_freshness_token(form.strategy_preset)
-        cache_key = (
-            form.strategy_preset.value,
-            form.start_date.isoformat(),
-            form.end_date.isoformat(),
-            str(form.initial_capital),
-            str(form.top_n),
-            form.transaction_cost_preset.value,
-            freshness_token,
-        )
-        cached = self._cache.get(cache_key)
-        if cached is not None:
-            return cached
+        readiness = self.repository.check_readiness(form.strategy_preset)
+        if not readiness.ok:
+            return self._dependency_error_context(form, readiness)
+        try:
+            freshness_token = self.repository.fetch_freshness_token(form.strategy_preset)
+            cache_key = (
+                form.strategy_preset.value,
+                form.start_date.isoformat(),
+                form.end_date.isoformat(),
+                str(form.initial_capital),
+                str(form.top_n),
+                form.transaction_cost_preset.value,
+                freshness_token,
+            )
+            cached = self._cache.get(cache_key)
+            if cached is not None:
+                return cached
 
-        calendar_start = form.start_date
-        calendar_end = form.end_date + timedelta(days=7)
-        spy_calendar = self.repository.fetch_spy_calendar(calendar_start, calendar_end)
-        signal_dates = [
-            point
-            for point in self._signal_dates(spy_calendar, form.start_date, form.end_date)
-        ]
-        factor_rows = self.repository.fetch_factor_rows(form.strategy_preset, signal_dates)
-        all_factor_symbols = sorted({row.symbol for row in factor_rows})
-        execution_dates = [
-            spy_calendar[index + 1]
-            for index, current_date in enumerate(spy_calendar[:-1])
-            if current_date in signal_dates and spy_calendar[index + 1] <= form.end_date
-        ]
-        execution_price_rows = self.repository.fetch_execution_prices(all_factor_symbols, execution_dates)
-        earliest_available = self.repository.fetch_earliest_available_trade_date(form.strategy_preset)
-
-        selected_symbols = sorted({row.symbol for row in factor_rows})
-        daily_close_rows = self.repository.fetch_daily_closes(selected_symbols, form.start_date, form.end_date)
-        simulation = simulate_backtest(
-            input_data=form,
-            calendar_dates=spy_calendar,
-            factor_rows=factor_rows,
-            execution_price_rows=execution_price_rows,
-            daily_close_rows=daily_close_rows,
-            earliest_available_trade_date=earliest_available,
-            transaction_cost_rate=Decimal(str(TRANSACTION_COST_BPS[form.transaction_cost_preset])),
-        )
+            calendar_start = form.start_date
+            calendar_end = form.end_date + timedelta(days=7)
+            spy_calendar = self.repository.fetch_spy_calendar(calendar_start, calendar_end)
+            signal_dates = month_end_signal_dates(spy_calendar, form.start_date, form.end_date)
+            factor_rows = self.repository.fetch_factor_rows(form.strategy_preset, signal_dates)
+            all_factor_symbols = sorted({row.symbol for row in factor_rows})
+            execution_dates = [
+                spy_calendar[index + 1]
+                for index, current_date in enumerate(spy_calendar[:-1])
+                if current_date in signal_dates and spy_calendar[index + 1] <= form.end_date
+            ]
+            execution_price_rows = self.repository.fetch_execution_prices(all_factor_symbols, execution_dates)
+            earliest_available = self.repository.fetch_earliest_available_trade_date(form.strategy_preset)
+            selected_symbols = self._selected_symbols_for_daily_closes(form, spy_calendar, factor_rows, execution_price_rows)
+            daily_close_rows = self.repository.fetch_daily_closes(selected_symbols, form.start_date, form.end_date)
+            simulation = simulate_backtest(
+                input_data=form,
+                calendar_dates=spy_calendar,
+                factor_rows=factor_rows,
+                execution_price_rows=execution_price_rows,
+                daily_close_rows=daily_close_rows,
+                earliest_available_trade_date=earliest_available,
+                transaction_cost_rate=Decimal(str(TRANSACTION_COST_BPS[form.transaction_cost_preset])),
+            )
+        except psycopg.Error as exc:
+            return self._dependency_error_context(form, self.repository.classify_error(exc, form.strategy_preset))
         context = self._context_from_simulation(form, simulation)
         self._cache.set(cache_key, context)
         return context
 
-    def _signal_dates(self, spy_calendar: list[date], start_date: date, end_date: date) -> list[date]:
-        from quant_data_platform.web.services.engine import month_end_signal_dates
+    def _selected_symbols_for_daily_closes(
+        self,
+        form: BacktestFormInput,
+        spy_calendar: list[date],
+        factor_rows: list[Any],
+        execution_price_rows: list[Any],
+    ) -> list[str]:
+        preset = get_strategy_preset(form.strategy_preset)
+        signal_dates = month_end_signal_dates(spy_calendar, form.start_date, form.end_date)
+        schedule = execution_schedule(spy_calendar, signal_dates, form.end_date)
+        factor_rows_by_signal: dict[date, list[Any]] = defaultdict(list)
+        for row in factor_rows:
+            factor_rows_by_signal[row.trade_date].append(row)
+        execution_open_map = {
+            (row.symbol, row.trade_date): Decimal(row.adjusted_open) if row.adjusted_open is not None else None
+            for row in execution_price_rows
+        }
+        selected_symbols: set[str] = set()
+        for signal_date in signal_dates:
+            execution_date = schedule.get(signal_date)
+            if execution_date is None:
+                continue
+            selected_rows, _excluded = select_top_candidates(
+                factor_rows_by_signal.get(signal_date, []),
+                preset,
+                form.top_n,
+                execution_open_map,
+                execution_date,
+            )
+            selected_symbols.update(row.symbol for row in selected_rows)
+        return sorted(selected_symbols)
 
-        return month_end_signal_dates(spy_calendar, start_date, end_date)
+    def _dependency_error_context(self, form: BacktestFormInput, readiness: ReadinessStatus) -> BacktestPageContext:
+        return self.error_context(
+            form=form,
+            message=self._dependency_error_message(readiness),
+            http_status_code=503 if readiness.code != "database_error" else 500,
+        )
+
+    def _dependency_error_message(self, readiness: ReadinessStatus) -> str:
+        if readiness.code == "database_unreachable":
+            return (
+                "백테스트 데이터베이스에 연결하지 못했습니다. "
+                "Docker 경로라면 `docker compose up -d postgres backtest-web`로 서비스를 띄워 주세요. "
+                "로컬 `uv run` 경로라면 `POSTGRES_HOST=127.0.0.1 POSTGRES_PORT=55432`를 지정해 compose Postgres에 연결해야 합니다."
+            )
+        if readiness.code in {"missing_schema", "missing_relation", "unqueryable_relation"}:
+            return (
+                "데이터베이스 연결은 되었지만 백테스트용 mart/stg 데이터가 아직 준비되지 않았습니다. "
+                "Airflow 적재와 dbt 모델 실행이 끝났는지 확인해 주세요."
+            )
+        return "백테스트 쿼리 실행 중 데이터베이스 오류가 발생했습니다. 연결 상태와 서버 로그를 함께 확인해 주세요."
 
     def _context_from_simulation(self, form: BacktestFormInput, simulation: SimulationResult) -> BacktestPageContext:
         if simulation.state in {PageState.NO_DATA, PageState.INSUFFICIENT_HISTORY, PageState.ERROR}:
@@ -208,6 +274,7 @@ class BacktestPageService:
                 warnings=[WarningMessage(title=warning.title, body=warning.body, tone=warning.tone) for warning in simulation.warnings],
                 data_quality_flags=simulation.data_quality_flags,
                 error_message=simulation.error_message,
+                http_status_code=400 if simulation.state == PageState.ERROR else 200,
             )
 
         summary_metrics = self._build_summary_metrics(simulation.summary_metrics)

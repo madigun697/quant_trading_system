@@ -5,8 +5,9 @@ from datetime import date, timedelta
 from decimal import Decimal
 from typing import Any
 
+import psycopg
 from quant_data_platform.storage import postgres_connection
-from quant_data_platform.web.presets import StrategyPreset, StrategyPresetId, get_strategy_preset
+from quant_data_platform.web.presets import STRATEGY_PRESETS, StrategyPreset, StrategyPresetId, get_strategy_preset
 
 
 @dataclass(frozen=True)
@@ -31,7 +32,17 @@ class DailyCloseRow:
     adjusted_close: Decimal | None
 
 
+@dataclass(frozen=True)
+class ReadinessStatus:
+    ok: bool
+    code: str
+    detail: str
+    checked_relations: tuple[str, ...] = ()
+
+
 class BacktestRepository:
+    NULL_LIQUIDITY_RANK = 1_000_000_000
+
     def calendar_query(self) -> str:
         return """
             select observation_date
@@ -47,7 +58,7 @@ class BacktestRepository:
             select symbol, trade_date, liquidity_rank, {factor_columns}
             from mart.{preset.mart_table}
             where trade_date = any(%(signal_dates)s::date[])
-            order by trade_date, liquidity_rank, symbol
+            order by trade_date, liquidity_rank nulls last, symbol
         """
 
     def earliest_available_query(self, preset: StrategyPreset) -> str:
@@ -92,11 +103,96 @@ class BacktestRepository:
                 ) as freshness_token
         """
 
+    def schema_probe_query(self) -> str:
+        return """
+            select schema_name
+            from information_schema.schemata
+            where schema_name = any(%(schema_names)s::text[])
+            order by schema_name
+        """
+
     def compute_factor_buffer_start(self, preset_id: StrategyPresetId, start_date: date) -> date:
         preset = get_strategy_preset(preset_id)
         if preset.lookback_days <= 0:
             return date(start_date.year, start_date.month, 1)
         return start_date - timedelta(days=preset.lookback_days)
+
+    def required_relations(self, preset_id: StrategyPresetId | None = None) -> tuple[str, ...]:
+        mart_relations = (
+            (f"mart.{get_strategy_preset(preset_id).mart_table}",)
+            if preset_id is not None
+            else tuple(
+                f"mart.{preset.mart_table}"
+                for preset in STRATEGY_PRESETS.values()
+            )
+        )
+        return (
+            "stg.stg_daily_prices",
+            "stg.stg_benchmark_series",
+            *mart_relations,
+        )
+
+    def relation_probe_query(self, relation_name: str) -> str:
+        return f"select 1 from {relation_name} limit 1"
+
+    def classify_error(self, exc: Exception, preset_id: StrategyPresetId | None = None) -> ReadinessStatus:
+        detail = self._compact_error_detail(exc)
+        if isinstance(exc, psycopg.OperationalError):
+            code = "database_unreachable"
+        elif isinstance(exc, psycopg.errors.InvalidSchemaName):
+            code = "missing_schema"
+        elif isinstance(exc, psycopg.errors.UndefinedTable):
+            code = "missing_relation"
+        else:
+            code = "database_error"
+        return ReadinessStatus(
+            ok=False,
+            code=code,
+            detail=detail,
+            checked_relations=self.required_relations(preset_id),
+        )
+
+    def check_readiness(self, preset_id: StrategyPresetId | None = None) -> ReadinessStatus:
+        required_relations = self.required_relations(preset_id)
+        try:
+            with postgres_connection() as conn, conn.cursor() as cur:
+                cur.execute(self.schema_probe_query(), {"schema_names": ["mart", "stg"]})
+                found_schemas = {row["schema_name"] for row in cur.fetchall()}
+                missing_schemas = [schema_name for schema_name in ("mart", "stg") if schema_name not in found_schemas]
+                if missing_schemas:
+                    return ReadinessStatus(
+                        ok=False,
+                        code="missing_schema",
+                        detail=f"필수 스키마가 없습니다: {', '.join(missing_schemas)}",
+                        checked_relations=required_relations,
+                    )
+                for relation_name in required_relations:
+                    try:
+                        cur.execute(self.relation_probe_query(relation_name))
+                        cur.fetchone()
+                    except psycopg.Error as exc:
+                        return ReadinessStatus(
+                            ok=False,
+                            code="missing_relation" if isinstance(exc, psycopg.errors.UndefinedTable) else "unqueryable_relation",
+                            detail=f"{relation_name} 확인 실패: {self._compact_error_detail(exc)}",
+                            checked_relations=required_relations,
+                        )
+        except psycopg.Error as exc:
+            return self.classify_error(exc, preset_id)
+        return ReadinessStatus(
+            ok=True,
+            code="ok",
+            detail="backtest dependencies are ready",
+            checked_relations=required_relations,
+        )
+
+    def _compact_error_detail(self, exc: Exception) -> str:
+        return " ".join(str(exc).split())
+
+    def normalize_liquidity_rank(self, value: Any) -> int:
+        if value is None:
+            return self.NULL_LIQUIDITY_RANK
+        return int(value)
 
     def fetch_spy_calendar(self, start_date: date, end_date: date) -> list[date]:
         with postgres_connection() as conn, conn.cursor() as cur:
@@ -116,7 +212,7 @@ class BacktestRepository:
                     FactorSnapshotRow(
                         symbol=row["symbol"],
                         trade_date=row["trade_date"],
-                        liquidity_rank=int(row["liquidity_rank"]),
+                        liquidity_rank=self.normalize_liquidity_rank(row["liquidity_rank"]),
                         factors=factors,
                     )
                 )
