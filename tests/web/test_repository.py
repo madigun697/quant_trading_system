@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date
 
 import psycopg
-from quant_data_platform.web.presets import StrategyPresetId, get_strategy_preset
+from quant_data_platform.web.presets import TRANSACTION_COST_BPS, StrategyPresetId, TransactionCostPreset, get_strategy_preset
 from quant_data_platform.web.repositories.backtest_repo import BacktestRepository
 
 
@@ -21,6 +21,13 @@ def test_calendar_query_uses_spy_benchmark_series() -> None:
     query = repo.calendar_query()
     assert "from stg.stg_benchmark_series" in query
     assert "benchmark_name = 'SPY'" in query
+
+
+def test_benchmark_value_query_reads_spy_series_value() -> None:
+    repo = BacktestRepository()
+    query = repo.benchmark_value_query()
+    assert "select observation_date, value" in query
+    assert "from stg.stg_benchmark_series" in query
 
 
 def test_execution_price_query_reads_stg_daily_prices() -> None:
@@ -59,3 +66,9 @@ def test_normalize_liquidity_rank_pushes_nulls_to_the_back() -> None:
     repo = BacktestRepository()
     assert repo.normalize_liquidity_rank(None) == repo.NULL_LIQUIDITY_RANK
     assert repo.normalize_liquidity_rank("7") == 7
+
+
+def test_transaction_cost_presets_are_stored_as_round_trip_totals() -> None:
+    assert TRANSACTION_COST_BPS[TransactionCostPreset.LOW] == 0.0005
+    assert TRANSACTION_COST_BPS[TransactionCostPreset.BASE] == 0.00125
+    assert TRANSACTION_COST_BPS[TransactionCostPreset.CONSERVATIVE] == 0.0025

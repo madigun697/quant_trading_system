@@ -2,7 +2,7 @@
   <section class="panel-card">
     <div class="panel-header">
       <h2>리밸런스 요약 로그</h2>
-      <p>매월 몇 개를 갈아탔는지와 비용이 얼마나 들었는지 빠르게 읽는 표입니다.</p>
+      <p>매월 얼마를 실제로 사고팔았는지, 그리고 리밸런스 직전 자산 대비 회전율이 얼마나 되는지 빠르게 읽는 표입니다.</p>
     </div>
     <div class="table-wrap">
       <table>
@@ -16,6 +16,7 @@
             <th>매도 금액</th>
             <th>비용</th>
             <th>회전율</th>
+            <th>메모</th>
           </tr>
         </thead>
         <tbody>
@@ -29,6 +30,7 @@
               <td>{{ row.sell_notional }}</td>
               <td>{{ row.fees }}</td>
               <td>{{ row.turnover }}</td>
+              <td>{{ row.notes or '-' }}</td>
             </tr>
           {% endfor %}
         </tbody>

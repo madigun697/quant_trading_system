@@ -26,19 +26,21 @@ class FakeService:
                 "top_n": "10",
                 "transaction_cost_preset": "conservative",
             },
-            preset_options=[{"id": "value_quality", "label": "Value + Quality", "description": "desc", "lookback_label": "lb"}],
-            transaction_cost_options=[{"id": "conservative", "label": "Conservative", "description": "왕복 총비용 50bp"}],
+            preset_options=[{"id": "value_quality", "label": "Value + Quality", "description": "desc", "lookback_label": "lb", "rationale": "rationale", "higher_is_better": [], "lower_is_better": [], "execution_notes": [], "risk_notes": []}],
+            transaction_cost_options=[{"id": "conservative", "label": "Conservative", "description": "왕복 총비용 50bp", "round_trip_bps": 50, "details": "detail"}],
         )
 
     def readiness_status(self) -> ReadinessStatus:
         return self.readiness
 
-    def error_context(self, form, message: str, field_errors=None, http_status_code: int = 400) -> BacktestPageContext:
+    def error_context(self, form, message: str, field_errors=None, http_status_code: int = 400, form_values=None) -> BacktestPageContext:
         context = self.empty_context()
         context.state = PageState.ERROR
         context.error_message = message
         context.field_errors = field_errors or {}
         context.http_status_code = http_status_code
+        if form_values is not None:
+            context.form_values = form_values
         return context
 
     def build_context(self, form) -> BacktestPageContext:
@@ -169,7 +171,7 @@ def test_post_no_data_returns_state_message() -> None:
         },
     )
     assert response.status_code == 200
-    assert "이번 조건에서는 체결 가능한 결과가 없습니다" in response.text
+    assert "이번 조건에서는 실행 결과를 만들지 못했습니다" in response.text
 
 
 def test_form_values_persist_after_post() -> None:

@@ -46,13 +46,14 @@ def build_router(
         try:
             form = BacktestFormInput.model_validate(raw_form)
         except ValidationError as exc:
+            raw_values = form_values_from_raw(raw_form)
             context = service.error_context(
                 form=None,
                 message="입력값을 다시 확인해 주세요.",
                 field_errors=field_errors_from_validation_error(exc),
                 http_status_code=422,
+                form_values=raw_values,
             )
-            context.form_values = form_values_from_raw(raw_form)
             return templates.TemplateResponse(request, "backtest/index.html", context.model_dump(), status_code=422)
 
         context = service.build_context(form)

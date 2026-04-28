@@ -4,25 +4,25 @@
     <p>설정은 적게, 해석은 쉽게. 첫 버전은 프리셋만 지원합니다.</p>
   </div>
 
+  <script type="application/json" data-preset-options-json>{{ preset_options | tojson }}</script>
+  <script type="application/json" data-cost-options-json>{{ transaction_cost_options | tojson }}</script>
+
   {% if field_errors.get('__root__') %}
     <div class="inline-error">{{ field_errors['__root__'] }}</div>
   {% endif %}
 
   <label class="field">
     <span>전략 프리셋</span>
-    <select name="strategy_preset">
+    <select name="strategy_preset" data-preset-select>
       {% for preset in preset_options %}
         <option value="{{ preset.id }}" {% if form_values.strategy_preset == preset.id %}selected{% endif %}>
           {{ preset.label }}
         </option>
       {% endfor %}
     </select>
-    <small class="field-help">
-      {% for preset in preset_options %}
-        {% if form_values.strategy_preset == preset.id %}
-          {{ preset.description }} · {{ preset.lookback_label }}
-        {% endif %}
-      {% endfor %}
+    <small class="field-help" data-preset-help aria-live="polite">
+      {{ selected_preset_detail.description if selected_preset_detail else '' }}
+      {% if selected_preset_detail %} · {{ selected_preset_detail.lookback_label }}{% endif %}
     </small>
     {% if field_errors.get('strategy_preset') %}<small class="field-error">{{ field_errors['strategy_preset'] }}</small>{% endif %}
   </label>
@@ -42,7 +42,14 @@
 
   <label class="field">
     <span>초기 자본</span>
-    <input type="number" step="1000" min="1" name="initial_capital" value="{{ form_values.initial_capital }}">
+    <input
+      type="number"
+      step="any"
+      inputmode="decimal"
+      min="1"
+      name="initial_capital"
+      value="{{ form_values.initial_capital }}"
+    >
     <small class="field-help">달러 기준 초기 자본입니다.</small>
     {% if field_errors.get('initial_capital') %}<small class="field-error">{{ field_errors['initial_capital'] }}</small>{% endif %}
   </label>
@@ -54,28 +61,78 @@
         <option value="{{ option }}" {% if form_values.top_n == option %}selected{% endif %}>{{ option }}개</option>
       {% endfor %}
     </select>
-    <small class="field-help">매월 상위 점수 종목을 동일 비중으로 보유합니다.</small>
+    <small class="field-help">매월 상위 점수 종목을 동일비중으로 맞추되, 겹치는 종목은 필요한 만큼만 조정합니다.</small>
     {% if field_errors.get('top_n') %}<small class="field-error">{{ field_errors['top_n'] }}</small>{% endif %}
   </label>
 
   <label class="field">
     <span>거래비용 프리셋</span>
-    <select name="transaction_cost_preset">
+    <select name="transaction_cost_preset" data-cost-select>
       {% for option in transaction_cost_options %}
         <option value="{{ option.id }}" {% if form_values.transaction_cost_preset == option.id %}selected{% endif %}>
           {{ option.label }}
         </option>
       {% endfor %}
     </select>
-    <small class="field-help">
-      {% for option in transaction_cost_options %}
-        {% if form_values.transaction_cost_preset == option.id %}
-          {{ option.description }}
-        {% endif %}
-      {% endfor %}
+    <small class="field-help" data-cost-help aria-live="polite">
+      {{ selected_cost_detail.description if selected_cost_detail else '' }}
+      {% if selected_cost_detail %} · {{ selected_cost_detail.details }}{% endif %}
     </small>
     {% if field_errors.get('transaction_cost_preset') %}<small class="field-error">{{ field_errors['transaction_cost_preset'] }}</small>{% endif %}
   </label>
+
+  <section class="selection-summary" data-selection-summary aria-live="polite">
+    <h3>현재 선택 요약</h3>
+    <p class="selection-summary__lead" data-selection-rationale>
+      {{ selected_preset_detail.rationale if selected_preset_detail else '' }}
+    </p>
+    <div class="selection-summary__stack">
+      <article class="selection-chip">
+        <strong>전략 설명</strong>
+        <p data-selection-description>{{ selected_preset_detail.description if selected_preset_detail else '' }}</p>
+      </article>
+      <article class="selection-chip">
+        <strong>실행 조건</strong>
+        <p data-selection-execution>
+          {% if selected_preset_detail %}
+            {{ selected_preset_detail.execution_notes | join(' / ') }}
+          {% endif %}
+        </p>
+      </article>
+      <article class="selection-chip">
+        <strong>거래비용 가정</strong>
+        <p data-selection-cost>
+          {% if selected_cost_detail %}
+            {{ selected_cost_detail.description }} · {{ selected_cost_detail.details }}
+          {% endif %}
+        </p>
+      </article>
+    </div>
+    <details class="selection-details">
+      <summary>선정 기준 자세히 보기</summary>
+      <div class="selection-details__body">
+        <p><strong>핵심 아이디어</strong> <span data-selection-rationale-detail>{{ selected_preset_detail.rationale if selected_preset_detail else '' }}</span></p>
+        <p>
+          <strong>높을수록 우선</strong>
+          <span data-selection-higher>
+            {% if selected_preset_detail %}
+              {{ selected_preset_detail.higher_is_better | join(', ') if selected_preset_detail.higher_is_better else '해당 없음' }}
+            {% endif %}
+          </span>
+        </p>
+        <p>
+          <strong>낮을수록 우선</strong>
+          <span data-selection-lower>
+            {% if selected_preset_detail %}
+              {{ selected_preset_detail.lower_is_better | join(', ') if selected_preset_detail.lower_is_better else '해당 없음' }}
+            {% endif %}
+          </span>
+        </p>
+        <p><strong>데이터 요구</strong> <span data-selection-lookback>{{ selected_preset_detail.lookback_label if selected_preset_detail else '' }}</span></p>
+        <p><strong>주의 메모</strong> <span data-selection-risk>{% if selected_preset_detail %}{{ selected_preset_detail.risk_notes | join(' / ') }}{% endif %}</span></p>
+      </div>
+    </details>
+  </section>
 
   <button type="submit" class="primary-button" data-submit-button>백테스트 실행</button>
   <p class="loading-note" data-loading-note hidden>전략 후보와 체결 가격을 계산하는 중입니다...</p>

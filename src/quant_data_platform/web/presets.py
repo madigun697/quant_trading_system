@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, timedelta
 from enum import StrEnum
+from typing import Any
 
 
 class StrategyPresetId(StrEnum):
@@ -20,6 +21,7 @@ class TransactionCostPreset(StrEnum):
 @dataclass(frozen=True)
 class FactorSpec:
     column: str
+    label: str
     higher_is_better: bool
 
 
@@ -32,12 +34,48 @@ class StrategyPreset:
     factor_specs: tuple[FactorSpec, ...]
     lookback_days: int
     lookback_label: str
+    rationale: str
+    execution_notes: tuple[str, ...]
+    risk_notes: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class TransactionCostOption:
+    preset: TransactionCostPreset
+    label: str
+    description: str
+    round_trip_bps: int
+    details: str
+
+
+TRANSACTION_COST_OPTIONS: dict[TransactionCostPreset, TransactionCostOption] = {
+    TransactionCostPreset.LOW: TransactionCostOption(
+        preset=TransactionCostPreset.LOW,
+        label="Low",
+        description="왕복 총비용 10bp",
+        round_trip_bps=10,
+        details="유동성이 충분한 대형주를 비교적 낙관적으로 가정한 비용입니다.",
+    ),
+    TransactionCostPreset.BASE: TransactionCostOption(
+        preset=TransactionCostPreset.BASE,
+        label="Base",
+        description="왕복 총비용 25bp",
+        round_trip_bps=25,
+        details="일반적인 주식 리밸런싱 비용을 무난하게 반영한 기본값입니다.",
+    ),
+    TransactionCostPreset.CONSERVATIVE: TransactionCostOption(
+        preset=TransactionCostPreset.CONSERVATIVE,
+        label="Conservative",
+        description="왕복 총비용 50bp",
+        round_trip_bps=50,
+        details="슬리피지와 체결 불리함까지 넉넉히 잡는 보수적 가정입니다.",
+    ),
+}
 
 
 TRANSACTION_COST_BPS: dict[TransactionCostPreset, float] = {
-    TransactionCostPreset.LOW: 0.0010,
-    TransactionCostPreset.BASE: 0.0025,
-    TransactionCostPreset.CONSERVATIVE: 0.0050,
+    preset: option.round_trip_bps / 20_000
+    for preset, option in TRANSACTION_COST_OPTIONS.items()
 }
 
 
@@ -45,95 +83,140 @@ STRATEGY_PRESETS: dict[StrategyPresetId, StrategyPreset] = {
     StrategyPresetId.VALUE_QUALITY: StrategyPreset(
         preset_id=StrategyPresetId.VALUE_QUALITY,
         label="Value + Quality",
-        description="저평가 + 수익성 품질을 함께 보는 전통적인 팩터 조합",
+        description="저평가 지표와 재무 품질을 함께 보는 전통적인 팩터 조합입니다.",
         mart_table="mart_value_quality_inputs",
         factor_specs=(
-            FactorSpec("pe_ratio", higher_is_better=False),
-            FactorSpec("pb_ratio", higher_is_better=False),
-            FactorSpec("ev_to_ebitda", higher_is_better=False),
-            FactorSpec("accruals", higher_is_better=False),
-            FactorSpec("debt_to_equity", higher_is_better=False),
-            FactorSpec("fcf_yield", higher_is_better=True),
-            FactorSpec("sales_yield", higher_is_better=True),
-            FactorSpec("roe", higher_is_better=True),
-            FactorSpec("roic_proxy", higher_is_better=True),
-            FactorSpec("gross_margin", higher_is_better=True),
-            FactorSpec("operating_margin", higher_is_better=True),
-            FactorSpec("interest_coverage", higher_is_better=True),
+            FactorSpec("pe_ratio", "PER", higher_is_better=False),
+            FactorSpec("pb_ratio", "PBR", higher_is_better=False),
+            FactorSpec("ev_to_ebitda", "EV/EBITDA", higher_is_better=False),
+            FactorSpec("accruals", "발생액 비율", higher_is_better=False),
+            FactorSpec("debt_to_equity", "부채비율", higher_is_better=False),
+            FactorSpec("fcf_yield", "FCF Yield", higher_is_better=True),
+            FactorSpec("sales_yield", "Sales Yield", higher_is_better=True),
+            FactorSpec("roe", "ROE", higher_is_better=True),
+            FactorSpec("roic_proxy", "ROIC Proxy", higher_is_better=True),
+            FactorSpec("gross_margin", "매출총이익률", higher_is_better=True),
+            FactorSpec("operating_margin", "영업이익률", higher_is_better=True),
+            FactorSpec("interest_coverage", "이자보상배율", higher_is_better=True),
         ),
         lookback_days=0,
-        lookback_label="추가 과거 구간 요구 없음",
+        lookback_label="추가 가격 룩백 없이도 계산 가능한 프리셋입니다.",
+        rationale="싼 종목 중에서도 이익 체력이 좋은 회사를 우선해 가치 함정을 줄이려는 전략입니다.",
+        execution_notes=(
+            "월말 신호를 보고 다음 SPY 거래일 시가에 체결합니다.",
+            "선정된 상위 종목을 동일비중으로 맞추되, 겹치는 종목은 필요한 만큼만 조정합니다.",
+            "계속 선정된 종목은 유지하고 부족분만 추가 매수하거나 일부만 매도합니다.",
+        ),
+        risk_notes=(
+            "재무지표 공시 시차와 원천 데이터 품질에 민감합니다.",
+            "가치주가 장기간 소외되는 구간에서는 벤치마크 대비 부진할 수 있습니다.",
+        ),
     ),
     StrategyPresetId.VALUE_MOMENTUM: StrategyPreset(
         preset_id=StrategyPresetId.VALUE_MOMENTUM,
         label="Value + Momentum",
-        description="저평가 종목 중 최근 추세가 강한 종목을 우선하는 조합",
+        description="저평가 종목 중 최근 추세가 강한 종목을 우선하는 조합입니다.",
         mart_table="mart_value_momentum_inputs",
         factor_specs=(
-            FactorSpec("pe_ratio", higher_is_better=False),
-            FactorSpec("pb_ratio", higher_is_better=False),
-            FactorSpec("ev_to_ebitda", higher_is_better=False),
-            FactorSpec("fcf_yield", higher_is_better=True),
-            FactorSpec("sales_yield", higher_is_better=True),
-            FactorSpec("momentum_12_1", higher_is_better=True),
-            FactorSpec("momentum_6m", higher_is_better=True),
-            FactorSpec("momentum_3m", higher_is_better=True),
+            FactorSpec("pe_ratio", "PER", higher_is_better=False),
+            FactorSpec("pb_ratio", "PBR", higher_is_better=False),
+            FactorSpec("ev_to_ebitda", "EV/EBITDA", higher_is_better=False),
+            FactorSpec("fcf_yield", "FCF Yield", higher_is_better=True),
+            FactorSpec("sales_yield", "Sales Yield", higher_is_better=True),
+            FactorSpec("momentum_12_1", "12-1개월 모멘텀", higher_is_better=True),
+            FactorSpec("momentum_6m", "6개월 모멘텀", higher_is_better=True),
+            FactorSpec("momentum_3m", "3개월 모멘텀", higher_is_better=True),
         ),
         lookback_days=400,
-        lookback_label="최소 13개월 수준의 과거 가격 필요",
+        lookback_label="최소 13개월 수준의 과거 가격 이력이 필요합니다.",
+        rationale="싼 종목 중에서도 이미 수급과 추세가 붙은 후보를 우선해 반등보다 지속성을 노리는 전략입니다.",
+        execution_notes=(
+            "월말 신호를 보고 다음 SPY 거래일 시가에 체결합니다.",
+            "모멘텀 팩터 계산을 위해 충분한 가격 이력이 없는 종목은 자동 제외됩니다.",
+            "리밸런스는 목표 동일비중과 현재 보유 비중의 차이만큼만 거래합니다.",
+        ),
+        risk_notes=(
+            "추세 반전이 빠른 구간에서는 교체 비용이 커질 수 있습니다.",
+            "룩백 구간이 부족한 초기 기간은 실행 불가 월이 늘어날 수 있습니다.",
+        ),
     ),
     StrategyPresetId.QUALITY_LOWVOL: StrategyPreset(
         preset_id=StrategyPresetId.QUALITY_LOWVOL,
         label="Quality + Low Volatility",
-        description="재무 품질이 좋은 종목 중 변동성이 낮은 종목을 우선하는 조합",
+        description="재무 품질이 좋은 종목 중 변동성이 낮은 종목을 우선하는 조합입니다.",
         mart_table="mart_quality_lowvol_inputs",
         factor_specs=(
-            FactorSpec("roe", higher_is_better=True),
-            FactorSpec("gross_margin", higher_is_better=True),
-            FactorSpec("operating_margin", higher_is_better=True),
-            FactorSpec("debt_to_equity", higher_is_better=False),
-            FactorSpec("rolling_vol_63d", higher_is_better=False),
-            FactorSpec("rolling_vol_126d", higher_is_better=False),
-            FactorSpec("rolling_vol_252d", higher_is_better=False),
+            FactorSpec("roe", "ROE", higher_is_better=True),
+            FactorSpec("gross_margin", "매출총이익률", higher_is_better=True),
+            FactorSpec("operating_margin", "영업이익률", higher_is_better=True),
+            FactorSpec("debt_to_equity", "부채비율", higher_is_better=False),
+            FactorSpec("rolling_vol_63d", "63일 변동성", higher_is_better=False),
+            FactorSpec("rolling_vol_126d", "126일 변동성", higher_is_better=False),
+            FactorSpec("rolling_vol_252d", "252일 변동성", higher_is_better=False),
         ),
         lookback_days=370,
-        lookback_label="최소 252거래일 수준의 과거 가격 필요",
+        lookback_label="최소 252거래일 수준의 과거 가격 이력이 필요합니다.",
+        rationale="좋은 재무체력을 가진 종목 중에서도 흔들림이 적은 후보를 골라 방어적인 성향을 노리는 전략입니다.",
+        execution_notes=(
+            "월말 신호를 보고 다음 SPY 거래일 시가에 체결합니다.",
+            "변동성 계산을 위해 약 1년치 가격 이력이 부족하면 해당 월 후보에서 제외됩니다.",
+            "리밸런스는 목표 동일비중에 맞추기 위한 차이만큼만 거래합니다.",
+        ),
+        risk_notes=(
+            "방어적 성향 때문에 강한 상승장에서는 공격적 전략보다 느릴 수 있습니다.",
+            "변동성 계산 구간이 길어 초기 구간 실행 가능 월이 제한될 수 있습니다.",
+        ),
     ),
 }
+
+
+def _factor_groups(preset: StrategyPreset) -> tuple[list[str], list[str]]:
+    higher = [factor.label for factor in preset.factor_specs if factor.higher_is_better]
+    lower = [factor.label for factor in preset.factor_specs if not factor.higher_is_better]
+    return higher, lower
 
 
 def get_strategy_preset(preset_id: StrategyPresetId) -> StrategyPreset:
     return STRATEGY_PRESETS[preset_id]
 
 
-def list_preset_options() -> list[dict[str, str]]:
-    return [
-        {
-            "id": preset.preset_id.value,
-            "label": preset.label,
-            "description": preset.description,
-            "lookback_label": preset.lookback_label,
-        }
-        for preset in STRATEGY_PRESETS.values()
-    ]
+def get_transaction_cost_option(preset: TransactionCostPreset) -> TransactionCostOption:
+    return TRANSACTION_COST_OPTIONS[preset]
 
 
-def list_cost_options() -> list[dict[str, str]]:
-    return [
-        {
-            "id": preset.value,
-            "label": preset.name.title(),
-            "description": {
-                TransactionCostPreset.LOW: "왕복 총비용 10bp",
-                TransactionCostPreset.BASE: "왕복 총비용 25bp",
-                TransactionCostPreset.CONSERVATIVE: "왕복 총비용 50bp",
-            }[preset],
-        }
-        for preset in TransactionCostPreset
-    ]
+def serialize_strategy_preset(preset: StrategyPreset) -> dict[str, Any]:
+    higher, lower = _factor_groups(preset)
+    return {
+        "id": preset.preset_id.value,
+        "label": preset.label,
+        "description": preset.description,
+        "lookback_label": preset.lookback_label,
+        "rationale": preset.rationale,
+        "higher_is_better": higher,
+        "lower_is_better": lower,
+        "execution_notes": list(preset.execution_notes),
+        "risk_notes": list(preset.risk_notes),
+    }
+
+
+def list_preset_options() -> list[dict[str, Any]]:
+    return [serialize_strategy_preset(preset) for preset in STRATEGY_PRESETS.values()]
+
+
+def serialize_transaction_cost_option(option: TransactionCostOption) -> dict[str, Any]:
+    return {
+        "id": option.preset.value,
+        "label": option.label,
+        "description": option.description,
+        "round_trip_bps": option.round_trip_bps,
+        "details": option.details,
+    }
+
+
+def list_cost_options() -> list[dict[str, Any]]:
+    return [serialize_transaction_cost_option(option) for option in TRANSACTION_COST_OPTIONS.values()]
 
 
 def default_start_date(today: date | None = None) -> date:
     anchor = today or date.today()
     return anchor - timedelta(days=365 * 5)
-

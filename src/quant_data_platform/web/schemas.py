@@ -92,21 +92,54 @@ class EquityCurvePoint(BaseModel):
     date: str
     gross_equity: float
     net_equity: float
+    benchmark_equity: float | None = None
+
+
+class PresetDetail(BaseModel):
+    id: str
+    label: str
+    description: str
+    lookback_label: str
+    rationale: str
+    higher_is_better: list[str] = Field(default_factory=list)
+    lower_is_better: list[str] = Field(default_factory=list)
+    execution_notes: list[str] = Field(default_factory=list)
+    risk_notes: list[str] = Field(default_factory=list)
+
+
+class CostDetail(BaseModel):
+    id: str
+    label: str
+    description: str
+    round_trip_bps: int
+    details: str
+
+
+class UnavailableReason(BaseModel):
+    code: str
+    title: str
+    detail: str
+    facts: list[str] = Field(default_factory=list)
+    suggestions: list[str] = Field(default_factory=list)
 
 
 class BacktestPageContext(BaseModel):
     state: PageState
     form_values: dict[str, Any]
-    preset_options: list[dict[str, str]]
-    transaction_cost_options: list[dict[str, str]]
+    preset_options: list[dict[str, Any]]
+    transaction_cost_options: list[dict[str, Any]]
+    selected_preset_detail: PresetDetail | None = None
+    selected_cost_detail: CostDetail | None = None
     summary_metrics: list[SummaryMetric] = Field(default_factory=list)
     equity_curve: list[EquityCurvePoint] = Field(default_factory=list)
     trade_log_summary: list[TradeLogSummaryRow] = Field(default_factory=list)
     trade_log_rows: list[TradeLogDetailRow] = Field(default_factory=list)
     warnings: list[WarningMessage] = Field(default_factory=list)
     data_quality_flags: list[str] = Field(default_factory=list)
+    unavailable_reasons: list[UnavailableReason] = Field(default_factory=list)
     error_message: str | None = None
     field_errors: dict[str, str] = Field(default_factory=dict)
+    benchmark_available: bool = False
     equity_curve_svg: str | None = None
     page_title: str = "프리셋 백테스트"
     helper_copy: str = "월말 신호를 보고 다음 거래일에 체결하는 초보자용 프리셋 백테스트입니다."

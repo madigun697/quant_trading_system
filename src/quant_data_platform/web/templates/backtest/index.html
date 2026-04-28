@@ -30,11 +30,37 @@
         {% elif state in ["error", "no_data", "insufficient_history"] %}
           <section class="status-state panel-card">
             <h2>
-              {% if state == "error" %}입력이나 실행 조건을 다시 확인해 주세요{% endif %}
-              {% if state == "no_data" %}이번 조건에서는 체결 가능한 결과가 없습니다{% endif %}
+              {% if state == "error" %}실행 전에 확인해야 할 조건이 있습니다{% endif %}
+              {% if state == "no_data" %}이번 조건에서는 실행 결과를 만들지 못했습니다{% endif %}
               {% if state == "insufficient_history" %}초기 구간의 과거 이력이 부족합니다{% endif %}
             </h2>
             <p>{{ error_message }}</p>
+
+            {% if unavailable_reasons %}
+              <div class="reason-grid">
+                {% for reason in unavailable_reasons %}
+                  <article class="reason-card">
+                    <strong>{{ reason.title }}</strong>
+                    <p>{{ reason.detail }}</p>
+                    {% if reason.facts %}
+                      <ul class="reason-list">
+                        {% for fact in reason.facts %}
+                          <li>{{ fact }}</li>
+                        {% endfor %}
+                      </ul>
+                    {% endif %}
+                    {% if reason.suggestions %}
+                      <p class="reason-next">다음 시도</p>
+                      <ul class="reason-list">
+                        {% for suggestion in reason.suggestions %}
+                          <li>{{ suggestion }}</li>
+                        {% endfor %}
+                      </ul>
+                    {% endif %}
+                  </article>
+                {% endfor %}
+              </div>
+            {% endif %}
           </section>
         {% elif state == "loading" %}
           <section class="status-state panel-card">

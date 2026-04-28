@@ -1,10 +1,61 @@
 <section class="panel-card">
   <div class="panel-header">
     <h2>누적 자산 곡선</h2>
-    <p>Gross와 Net을 함께 보여 거래비용이 결과를 얼마나 깎는지 한눈에 확인합니다.</p>
+    <p>먼저 Net과 SPY를 비교하고, Gross는 거래비용이 결과를 얼마나 깎았는지 확인하는 보조선으로 보세요.</p>
   </div>
-  {% if equity_curve_svg %}
-    <div class="chart-frame">{{ equity_curve_svg | safe }}</div>
+  {% if equity_curve_svg and equity_curve %}
+    <section class="chart-card" data-chart-card>
+      <div class="chart-legend">
+        <span class="legend-item legend-item--net">Net</span>
+        {% if benchmark_available %}<span class="legend-item legend-item--spy">SPY</span>{% endif %}
+        <span class="legend-item legend-item--gross">Gross</span>
+      </div>
+      <div class="chart-frame" data-chart-frame>
+        <script type="application/json" data-chart-points-json>{{ equity_curve | tojson }}</script>
+        {{ equity_curve_svg | safe }}
+        <div class="chart-interaction-layer" data-chart-layer aria-hidden="true">
+          <div class="chart-guide" data-chart-guide hidden></div>
+          <div class="chart-marker chart-marker--net" data-marker="net" hidden></div>
+          <div class="chart-marker chart-marker--spy" data-marker="spy" hidden></div>
+          <div class="chart-marker chart-marker--gross" data-marker="gross" hidden></div>
+        </div>
+      </div>
+      <div class="chart-readout" data-chart-readout id="chart-readout" role="status" aria-live="polite">
+        <div>
+          <p class="chart-readout__label">날짜</p>
+          <strong data-readout-date>{{ equity_curve[-1].date }}</strong>
+        </div>
+        <div>
+          <p class="chart-readout__label">Net</p>
+          <strong data-readout-net></strong>
+        </div>
+        {% if benchmark_available %}
+          <div>
+            <p class="chart-readout__label">SPY</p>
+            <strong data-readout-spy></strong>
+          </div>
+        {% endif %}
+        <div>
+          <p class="chart-readout__label">Gross</p>
+          <strong data-readout-gross></strong>
+        </div>
+      </div>
+      {% if not benchmark_available %}
+        <p class="muted-copy">이번 실행에서는 SPY 비교선에 필요한 기준값이 부족해 차트에서 제외했습니다.</p>
+      {% endif %}
+      <label class="chart-scrubber">
+        <span>날짜 탐색</span>
+        <input
+          type="range"
+          min="0"
+          max="{{ equity_curve|length - 1 }}"
+          value="{{ equity_curve|length - 1 }}"
+          step="1"
+          data-chart-scrubber
+          aria-controls="chart-readout"
+        >
+      </label>
+    </section>
   {% else %}
     <p class="muted-copy">차트를 그릴 데이터가 아직 충분하지 않습니다.</p>
   {% endif %}

@@ -7,17 +7,32 @@ from decimal import Decimal
 from math import sqrt
 from statistics import mean, pstdev
 
-from quant_data_platform.web.presets import StrategyPreset, StrategyPresetId, TransactionCostPreset, get_strategy_preset
-from quant_data_platform.web.repositories.backtest_repo import DailyCloseRow, ExecutionPriceRow, FactorSnapshotRow
+from quant_data_platform.web.presets import StrategyPreset, get_strategy_preset
+from quant_data_platform.web.repositories.backtest_repo import BenchmarkValueRow, DailyCloseRow, ExecutionPriceRow, FactorSnapshotRow
 from quant_data_platform.web.schemas import BacktestFormInput, PageState
 
 
 @dataclass
 class Position:
     shares: Decimal
-    entry_price: Decimal
-    entry_date: date
-    entry_fee: Decimal
+    cost_basis: Decimal
+    entry_mass: Decimal
+
+    def buy(self, shares: Decimal, total_cost: Decimal, trade_date: date) -> None:
+        self.shares += shares
+        self.cost_basis += total_cost
+        self.entry_mass += shares * Decimal(trade_date.toordinal())
+
+    def sell(self, shares: Decimal, trade_date: date) -> tuple[Decimal, int]:
+        ratio = shares / self.shares
+        cost_basis_sold = self.cost_basis * ratio
+        entry_mass_sold = self.entry_mass * ratio
+        average_entry_ordinal = int(entry_mass_sold / shares) if shares > 0 else trade_date.toordinal()
+        holding_days = max(trade_date.toordinal() - average_entry_ordinal, 0)
+        self.shares -= shares
+        self.cost_basis -= cost_basis_sold
+        self.entry_mass -= entry_mass_sold
+        return cost_basis_sold, holding_days
 
 
 @dataclass(frozen=True)
@@ -25,6 +40,7 @@ class EquityPoint:
     date: date
     gross_equity: Decimal
     net_equity: Decimal
+    benchmark_equity: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -62,6 +78,15 @@ class WarningEvent:
 
 
 @dataclass(frozen=True)
+class UnavailableReasonEvent:
+    code: str
+    title: str
+    detail: str
+    facts: list[str]
+    suggestions: list[str]
+
+
+@dataclass(frozen=True)
 class SimulationResult:
     state: PageState
     equity_curve: list[EquityPoint]
@@ -70,6 +95,7 @@ class SimulationResult:
     warnings: list[WarningEvent]
     data_quality_flags: list[str]
     summary_metrics: dict[str, Decimal | float | int]
+    unavailable_reasons: list[UnavailableReasonEvent]
     error_message: str | None = None
 
 
@@ -131,7 +157,7 @@ def select_top_candidates(
     rows: list[FactorSnapshotRow],
     preset: StrategyPreset,
     top_n: int,
-    execution_opens: dict[tuple[str, date], Decimal],
+    execution_opens: dict[tuple[str, date], Decimal | None],
     execution_date: date,
 ) -> tuple[list[FactorSnapshotRow], dict[str, int]]:
     eligible_rows: list[FactorSnapshotRow] = []
@@ -167,11 +193,11 @@ def select_top_candidates(
 
 
 def _fallback_close_price(
-    close_map: dict[tuple[str, date], Decimal],
+    close_map: dict[tuple[str, date], Decimal | None],
     last_known_closes: dict[str, Decimal],
     symbol: str,
     current_date: date,
-    execution_open_map: dict[tuple[str, date], Decimal],
+    execution_open_map: dict[tuple[str, date], Decimal | None],
     quality_flags: set[str],
 ) -> Decimal | None:
     close_value = close_map.get((symbol, current_date))
@@ -202,7 +228,7 @@ def _build_warning_events(
     warnings: list[WarningEvent] = [
         WarningEvent(
             title="실전형 결과 기준",
-            body="이 화면은 거래비용을 차감한 순성과를 기본으로 보여주며, 월말 신호와 익영업일 체결을 전제로 합니다.",
+            body="이 화면은 거래비용을 반영한 Net 성과를 먼저 보여 주고, 같은 시작점의 SPY 비교선을 함께 제공합니다.",
             tone="info",
         )
     ]
@@ -210,7 +236,7 @@ def _build_warning_events(
     warnings.append(
         WarningEvent(
             title="거래비용 영향",
-            body=f"총수익 대비 순수익이 {cost_drag:.2%}만큼 낮아졌습니다. 비용이 큰 전략은 실제 체감 수익이 빠르게 줄 수 있습니다.",
+            body=f"총수익 대비 순수익이 {cost_drag:.2%}만큼 낮아졌습니다. Gross 선은 비용이 결과를 얼마나 깎았는지 확인하는 보조선입니다.",
         )
     )
     if (input_data.end_date - input_data.start_date).days < 365:
@@ -336,12 +362,64 @@ def _calculate_summary_metrics(
     }
 
 
+def _build_unavailable_reason(
+    *,
+    code: str,
+    title: str,
+    detail: str,
+    facts: list[str] | None = None,
+    suggestions: list[str] | None = None,
+) -> UnavailableReasonEvent:
+    return UnavailableReasonEvent(
+        code=code,
+        title=title,
+        detail=detail,
+        facts=facts or [],
+        suggestions=suggestions or [],
+    )
+
+
+def _solve_fee_aware_target_notional(
+    pre_trade_value: Decimal,
+    current_notionals: dict[str, Decimal],
+    target_symbols: list[str],
+    transaction_cost_rate: Decimal,
+) -> Decimal:
+    if not target_symbols:
+        return Decimal("0")
+
+    target_count = Decimal(len(target_symbols))
+    high = pre_trade_value / target_count
+    low = Decimal("0")
+    target_set = set(target_symbols)
+    all_symbols = sorted(set(current_notionals) | target_set)
+
+    def net_after_costs(target_notional: Decimal) -> Decimal:
+        traded_notional = Decimal("0")
+        for symbol in all_symbols:
+            current = current_notionals.get(symbol, Decimal("0"))
+            target = target_notional if symbol in target_set else Decimal("0")
+            traded_notional += abs(target - current)
+        return pre_trade_value - (transaction_cost_rate * traded_notional)
+
+    for _ in range(60):
+        mid = (low + high) / 2
+        target_total = mid * target_count
+        affordable_total = net_after_costs(mid)
+        if target_total > affordable_total:
+            high = mid
+        else:
+            low = mid
+    return low
+
+
 def simulate_backtest(
     input_data: BacktestFormInput,
     calendar_dates: list[date],
     factor_rows: list[FactorSnapshotRow],
     execution_price_rows: list[ExecutionPriceRow],
     daily_close_rows: list[DailyCloseRow],
+    benchmark_rows: list[BenchmarkValueRow],
     earliest_available_trade_date: date | None,
     transaction_cost_rate: Decimal,
 ) -> SimulationResult:
@@ -356,6 +434,14 @@ def simulate_backtest(
             warnings=[],
             data_quality_flags=[],
             summary_metrics={},
+            unavailable_reasons=[
+                _build_unavailable_reason(
+                    code="no_spy_calendar",
+                    title="선택한 기간에 SPY 거래일이 없습니다",
+                    detail="차트 기준이 되는 SPY 거래일을 찾지 못해 백테스트를 실행할 수 없습니다.",
+                    suggestions=["시작일과 종료일을 더 최근 구간으로 조정해 보세요."],
+                )
+            ],
             error_message="선택한 기간에 SPY 거래일이 없어 백테스트를 실행할 수 없습니다.",
         )
 
@@ -369,6 +455,15 @@ def simulate_backtest(
             warnings=[],
             data_quality_flags=[],
             summary_metrics={},
+            unavailable_reasons=[
+                _build_unavailable_reason(
+                    code="no_executable_rebalance",
+                    title="실행 가능한 리밸런스가 없습니다",
+                    detail="선택한 기간 안에 월말 신호 다음 거래일까지 포함된 구간이 없습니다.",
+                    facts=["종료일이 월말 신호 바로 뒤 거래일까지 포함되어야 실제 체결을 계산할 수 있습니다."],
+                    suggestions=["종료일을 조금 더 뒤로 늘려 보세요."],
+                )
+            ],
             error_message="선택한 기간 안에 실행 가능한 리밸런스가 없습니다.",
         )
 
@@ -380,10 +475,24 @@ def simulate_backtest(
         (row.symbol, row.trade_date): Decimal(row.adjusted_open) if row.adjusted_open is not None else None
         for row in execution_price_rows
     }
+    close_map = {
+        (row.symbol, row.trade_date): Decimal(row.adjusted_close) if row.adjusted_close is not None else None
+        for row in daily_close_rows
+    }
+    benchmark_map = {
+        row.observation_date: Decimal(row.value)
+        for row in benchmark_rows
+        if row.value is not None
+    }
+
     missing_execution_open_count = 0
     selected_by_signal: dict[date, list[FactorSnapshotRow]] = {}
     shortfall_notes: list[str] = []
+    unavailable_reasons: list[UnavailableReasonEvent] = []
     insufficient_history = False
+    blank_factor_month_count = 0
+    missing_snapshot_month_count = 0
+    zero_candidate_facts: list[str] = []
 
     for signal_date in signal_dates:
         execution_date = schedule.get(signal_date)
@@ -393,7 +502,11 @@ def simulate_backtest(
         if not monthly_rows:
             if earliest_available_trade_date and signal_date < earliest_available_trade_date:
                 insufficient_history = True
+                missing_snapshot_month_count += 1
+            else:
+                zero_candidate_facts.append(f"{signal_date.isoformat()} 신호에는 사용할 팩터 스냅샷이 없습니다.")
             continue
+
         all_factors_blank = all(
             all(row.factors[factor.column] is None for factor in preset.factor_specs)
             for row in monthly_rows
@@ -409,6 +522,11 @@ def simulate_backtest(
         if not selected_rows:
             if all_factors_blank:
                 insufficient_history = True
+                blank_factor_month_count += 1
+            zero_candidate_facts.append(
+                f"{signal_date.isoformat()} 신호: 후보 0 / 목표 {input_data.top_n}, "
+                f"팩터 누락 {excluded_counts['missing_factors']}개, 실행가 누락 {excluded_counts['missing_execution_open']}개"
+            )
             shortfall_notes.append(f"{signal_date.isoformat()} 신호는 체결 가능한 종목이 없어 건너뛰었습니다.")
             continue
         if len(selected_rows) < input_data.top_n:
@@ -418,12 +536,57 @@ def simulate_backtest(
         selected_by_signal[signal_date] = selected_rows
 
     if not selected_by_signal:
+        if insufficient_history:
+            facts: list[str] = [f"전략 데이터 시작 시점: {earliest_available_trade_date.isoformat()}"] if earliest_available_trade_date else []
+            if blank_factor_month_count:
+                facts.append(f"팩터가 전부 비어 있던 월: {blank_factor_month_count}개")
+            if missing_snapshot_month_count:
+                facts.append(f"전략 룩백 부족으로 제외된 월: {missing_snapshot_month_count}개")
+            facts.append(f"필요 이력: {preset.lookback_label}")
+            unavailable_reasons.append(
+                _build_unavailable_reason(
+                    code="insufficient_history",
+                    title="선택한 기간에 과거 이력이 충분하지 않습니다",
+                    detail="이 프리셋을 계산하는 데 필요한 가격 또는 팩터 이력이 초반 구간에 부족했습니다.",
+                    facts=facts,
+                    suggestions=["시작일을 더 뒤로 늦추거나, 룩백이 짧은 프리셋으로 바꿔 보세요."],
+                )
+            )
+        if zero_candidate_facts:
+            unavailable_reasons.append(
+                _build_unavailable_reason(
+                    code="no_eligible_candidates",
+                    title="체결 가능한 후보를 찾지 못했습니다",
+                    detail="선택한 월 신호들에서 필요한 팩터와 실행 가격을 모두 갖춘 종목이 없었습니다.",
+                    facts=zero_candidate_facts[:4],
+                    suggestions=["기간을 넓히거나 거래비용은 유지한 채 다른 프리셋을 선택해 보세요."],
+                )
+            )
+        if missing_execution_open_count:
+            unavailable_reasons.append(
+                _build_unavailable_reason(
+                    code="missing_execution_prices",
+                    title="실행 가격이 비어 있는 종목이 많았습니다",
+                    detail="익영업일 시가가 없는 종목은 실제 체결을 가정할 수 없어 모두 제외했습니다.",
+                    facts=[f"실행가 누락 종목 수: {missing_execution_open_count}"],
+                    suggestions=["같은 전략이라도 다른 기간에서는 실행가가 더 잘 확보될 수 있습니다."],
+                )
+            )
         state = PageState.INSUFFICIENT_HISTORY if insufficient_history else PageState.NO_DATA
         message = (
             "선택한 기간에는 전략 계산에 필요한 과거 이력이 부족합니다."
             if state == PageState.INSUFFICIENT_HISTORY
             else "선택한 기간과 조건에서 체결 가능한 후보를 찾지 못했습니다."
         )
+        if not unavailable_reasons:
+            unavailable_reasons.append(
+                _build_unavailable_reason(
+                    code="generic_no_data",
+                    title="실행 가능한 결과를 만들지 못했습니다",
+                    detail=message,
+                    suggestions=["날짜 범위를 넓히거나 다른 프리셋을 선택해 다시 실행해 보세요."],
+                )
+            )
         return SimulationResult(
             state=state,
             equity_curve=[],
@@ -432,18 +595,13 @@ def simulate_backtest(
             warnings=[],
             data_quality_flags=[],
             summary_metrics={},
+            unavailable_reasons=unavailable_reasons,
             error_message=message,
         )
 
-    symbols_for_daily_prices = sorted({row.symbol for rows in selected_by_signal.values() for row in rows})
-    close_map = {
-        (row.symbol, row.trade_date): Decimal(row.adjusted_close) if row.adjusted_close is not None else None
-        for row in daily_close_rows
-    }
-
     gross_cash = Decimal(input_data.initial_capital)
     net_cash = Decimal(input_data.initial_capital)
-    gross_positions: dict[str, Position] = {}
+    gross_positions: dict[str, Decimal] = {}
     net_positions: dict[str, Position] = {}
     fill_rows: list[FillEvent] = []
     summary_rows: list[RebalanceSummary] = []
@@ -453,7 +611,14 @@ def simulate_backtest(
     total_fees = Decimal("0")
     total_turnover_notional = Decimal("0")
 
-    signal_by_execution = {execution_date: signal_date for signal_date, execution_date in schedule.items() if signal_date in selected_by_signal}
+    signal_by_execution = {
+        execution_date: signal_date
+        for signal_date, execution_date in schedule.items()
+        if signal_date in selected_by_signal
+    }
+    first_execution_date = min(signal_by_execution) if signal_by_execution else None
+    benchmark_shares: Decimal | None = None
+    benchmark_last_value: Decimal | None = None
     calendar_in_range = [calendar_date for calendar_date in calendar_dates if input_data.start_date <= calendar_date <= input_data.end_date]
 
     for current_date in calendar_in_range:
@@ -461,55 +626,102 @@ def simulate_backtest(
         if signal_date is not None:
             selected_rows = selected_by_signal[signal_date]
             selected_symbols = [row.symbol for row in selected_rows]
-
-            sold_count = len(net_positions)
             rebalance_sell_notional = Decimal("0")
             rebalance_buy_notional = Decimal("0")
             rebalance_fees = Decimal("0")
+            sold_count = 0
 
-            if gross_positions:
-                for symbol, position in list(gross_positions.items()):
-                    execution_open = execution_open_map.get((symbol, current_date))
-                    if execution_open is None:
-                        return SimulationResult(
-                            state=PageState.ERROR,
-                            equity_curve=[],
-                            summary_rows=[],
-                            fill_rows=[],
-                            warnings=[],
-                            data_quality_flags=[],
-                            summary_metrics={},
-                            error_message=f"{current_date.isoformat()} 체결일에 {symbol}의 실행 가격이 없어 리밸런스를 계속할 수 없습니다.",
-                        )
-                    gross_cash += position.shares * execution_open
-                    del gross_positions[symbol]
+            current_open_prices = {
+                symbol: execution_open_map.get((symbol, current_date))
+                for symbol in sorted(set(gross_positions) | set(net_positions) | set(selected_symbols))
+            }
+            missing_symbols = [symbol for symbol, price in current_open_prices.items() if price is None and symbol in set(gross_positions) | set(net_positions)]
+            if missing_symbols:
+                symbol_list = ", ".join(missing_symbols[:3])
+                reason = _build_unavailable_reason(
+                    code="missing_rebalance_price",
+                    title="보유 종목의 체결 가격이 비어 있습니다",
+                    detail=f"{current_date.isoformat()} 체결일에 {symbol_list}의 실행 가격이 없어 리밸런스를 계속할 수 없습니다.",
+                    facts=[f"누락 종목 수: {len(missing_symbols)}"],
+                    suggestions=["해당 기간을 피하거나 데이터 적재 상태를 확인해 주세요."],
+                )
+                return SimulationResult(
+                    state=PageState.ERROR,
+                    equity_curve=[],
+                    summary_rows=[],
+                    fill_rows=[],
+                    warnings=[],
+                    data_quality_flags=[],
+                    summary_metrics={},
+                    unavailable_reasons=[reason],
+                    error_message=reason.detail,
+                )
 
-            if net_positions:
-                for symbol, position in list(net_positions.items()):
-                    execution_open = execution_open_map.get((symbol, current_date))
-                    if execution_open is None:
-                        return SimulationResult(
-                            state=PageState.ERROR,
-                            equity_curve=[],
-                            summary_rows=[],
-                            fill_rows=[],
-                            warnings=[],
-                            data_quality_flags=[],
-                            summary_metrics={},
-                            error_message=f"{current_date.isoformat()} 체결일에 {symbol}의 실행 가격이 없어 리밸런스를 계속할 수 없습니다.",
-                        )
-                    sell_notional = position.shares * execution_open
+            gross_current_notionals = {
+                symbol: shares * current_open_prices[symbol]
+                for symbol, shares in gross_positions.items()
+                if current_open_prices[symbol] is not None
+            }
+            net_current_notionals = {
+                symbol: position.shares * current_open_prices[symbol]
+                for symbol, position in net_positions.items()
+                if current_open_prices[symbol] is not None
+            }
+            gross_pre_trade_value = gross_cash + sum(gross_current_notionals.values(), start=Decimal("0"))
+            net_pre_trade_value = net_cash + sum(net_current_notionals.values(), start=Decimal("0"))
+
+            gross_target_notional = gross_pre_trade_value / Decimal(len(selected_symbols)) if selected_symbols else Decimal("0")
+            net_target_notional = _solve_fee_aware_target_notional(
+                net_pre_trade_value,
+                net_current_notionals,
+                selected_symbols,
+                transaction_cost_rate,
+            )
+
+            all_symbols = sorted(set(gross_positions) | set(net_positions) | set(selected_symbols))
+            gross_deltas: dict[str, Decimal] = {}
+            net_deltas: dict[str, Decimal] = {}
+            for symbol in all_symbols:
+                gross_current = gross_current_notionals.get(symbol, Decimal("0"))
+                net_current = net_current_notionals.get(symbol, Decimal("0"))
+                target = gross_target_notional if symbol in selected_symbols else Decimal("0")
+                gross_deltas[symbol] = target - gross_current
+                net_target = net_target_notional if symbol in selected_symbols else Decimal("0")
+                net_deltas[symbol] = net_target - net_current
+
+            for symbol in all_symbols:
+                execution_open = current_open_prices[symbol]
+                if execution_open is None:
+                    continue
+
+                gross_delta = gross_deltas[symbol]
+                if gross_delta < 0:
+                    sell_shares = (-gross_delta) / execution_open
+                    gross_cash += (-gross_delta)
+                    remaining_shares = gross_positions.get(symbol, Decimal("0")) - sell_shares
+                    if remaining_shares <= Decimal("0.0000000001"):
+                        gross_positions.pop(symbol, None)
+                    else:
+                        gross_positions[symbol] = remaining_shares
+
+                net_delta = net_deltas[symbol]
+                if net_delta < 0:
+                    position = net_positions.get(symbol)
+                    if position is None:
+                        continue
+                    sell_notional = -net_delta
+                    sell_shares = sell_notional / execution_open
                     sell_fee = sell_notional * transaction_cost_rate
+                    cost_basis_sold, holding_days = position.sell(sell_shares, current_date)
                     net_cash += sell_notional - sell_fee
-                    realized_pnl = sell_notional - sell_fee - (position.shares * position.entry_price) - position.entry_fee
-                    holding_days = (current_date - position.entry_date).days
+                    realized_pnl = (sell_notional - sell_fee) - cost_basis_sold
                     fill_rows.append(
                         FillEvent(
                             execution_date=current_date,
                             signal_date=signal_date,
                             symbol=symbol,
                             action="SELL",
-                            shares=position.shares,
+                            shares=sell_shares,
                             execution_price=execution_open,
                             fees=sell_fee,
                             net_cash_flow=sell_notional - sell_fee,
@@ -521,53 +733,62 @@ def simulate_backtest(
                     rebalance_sell_notional += sell_notional
                     rebalance_fees += sell_fee
                     total_turnover_notional += sell_notional
-                    del net_positions[symbol]
+                    sold_count += 1
+                    if position.shares <= Decimal("0.0000000001"):
+                        net_positions.pop(symbol, None)
 
-            if selected_symbols:
-                gross_allocation = gross_cash / Decimal(len(selected_symbols))
-                net_allocation = net_cash / (Decimal(len(selected_symbols)) * (Decimal("1") + transaction_cost_rate))
-                for symbol in selected_symbols:
-                    execution_open = execution_open_map[(symbol, current_date)]
-                    if execution_open is None:
-                        continue
-                    gross_shares = gross_allocation / execution_open
-                    gross_notional = gross_shares * execution_open
-                    gross_cash -= gross_notional
-                    gross_positions[symbol] = Position(
-                        shares=gross_shares,
-                        entry_price=execution_open,
-                        entry_date=current_date,
-                        entry_fee=Decimal("0"),
-                    )
+            for symbol in all_symbols:
+                execution_open = current_open_prices[symbol]
+                if execution_open is None:
+                    continue
 
-                    net_shares = net_allocation / execution_open
-                    buy_notional = net_shares * execution_open
-                    buy_fee = buy_notional * transaction_cost_rate
-                    net_cash -= buy_notional + buy_fee
-                    net_positions[symbol] = Position(
-                        shares=net_shares,
-                        entry_price=execution_open,
-                        entry_date=current_date,
-                        entry_fee=buy_fee,
-                    )
+                gross_delta = gross_deltas[symbol]
+                if gross_delta > 0:
+                    buy_shares = gross_delta / execution_open
+                    gross_cash -= gross_delta
+                    gross_positions[symbol] = gross_positions.get(symbol, Decimal("0")) + buy_shares
+
+                net_delta = net_deltas[symbol]
+                if net_delta > 0:
+                    buy_shares = net_delta / execution_open
+                    buy_fee = net_delta * transaction_cost_rate
+                    net_cash -= net_delta + buy_fee
+                    position = net_positions.get(symbol)
+                    if position is None:
+                        net_positions[symbol] = Position(
+                            shares=Decimal("0"),
+                            cost_basis=Decimal("0"),
+                            entry_mass=Decimal("0"),
+                        )
+                        position = net_positions[symbol]
+                    position.buy(buy_shares, net_delta + buy_fee, current_date)
                     fill_rows.append(
                         FillEvent(
                             execution_date=current_date,
                             signal_date=signal_date,
                             symbol=symbol,
                             action="BUY",
-                            shares=net_shares,
+                            shares=buy_shares,
                             execution_price=execution_open,
                             fees=buy_fee,
-                            net_cash_flow=-(buy_notional + buy_fee),
+                            net_cash_flow=-(net_delta + buy_fee),
                         )
                     )
                     total_fees += buy_fee
-                    rebalance_buy_notional += buy_notional
+                    rebalance_buy_notional += net_delta
                     rebalance_fees += buy_fee
-                    total_turnover_notional += buy_notional
+                    total_turnover_notional += net_delta
 
-            turnover = (rebalance_buy_notional + rebalance_sell_notional) / Decimal(input_data.initial_capital)
+            turnover = (
+                (rebalance_buy_notional + rebalance_sell_notional) / net_pre_trade_value
+                if net_pre_trade_value > 0
+                else Decimal("0")
+            )
+            note_fragments: list[str] = []
+            if len(selected_symbols) < input_data.top_n:
+                note_fragments.append("축소 포트폴리오")
+            if sold_count or rebalance_buy_notional:
+                note_fragments.append("필요 수량만 부분 리밸런스")
             summary_rows.append(
                 RebalanceSummary(
                     signal_date=signal_date,
@@ -578,25 +799,51 @@ def simulate_backtest(
                     sell_notional=rebalance_sell_notional,
                     fees=rebalance_fees,
                     turnover=turnover,
-                    notes=(
-                        "축소 포트폴리오"
-                        if len(selected_symbols) < input_data.top_n
-                        else None
-                    ),
+                    notes=", ".join(note_fragments) if note_fragments else None,
                 )
             )
 
+            if benchmark_shares is None and first_execution_date == current_date:
+                benchmark_entry_price = execution_open_map.get(("SPY", current_date))
+                if benchmark_entry_price is None:
+                    benchmark_entry_price = benchmark_map.get(current_date)
+                    if benchmark_entry_price is not None:
+                        quality_flags.add("SPY 시작 시가가 없어 첫 체결일 종가로 비교선을 시작했습니다.")
+                if benchmark_entry_price is not None and benchmark_entry_price > 0:
+                    benchmark_shares = Decimal(input_data.initial_capital) / (
+                        benchmark_entry_price * (Decimal("1") + transaction_cost_rate)
+                    )
+
         gross_equity = gross_cash
         net_equity = net_cash
-        for symbol, position in gross_positions.items():
+        for symbol, shares in gross_positions.items():
             close_value = _fallback_close_price(close_map, last_known_closes, symbol, current_date, execution_open_map, quality_flags)
             if close_value is not None:
-                gross_equity += position.shares * close_value
+                gross_equity += shares * close_value
         for symbol, position in net_positions.items():
             close_value = _fallback_close_price(close_map, last_known_closes, symbol, current_date, execution_open_map, quality_flags)
             if close_value is not None:
                 net_equity += position.shares * close_value
-        equity_curve.append(EquityPoint(date=current_date, gross_equity=gross_equity, net_equity=net_equity))
+
+        benchmark_equity: Decimal | None = None
+        if benchmark_shares is not None and first_execution_date is not None and current_date >= first_execution_date:
+            benchmark_value = benchmark_map.get(current_date)
+            if benchmark_value is not None:
+                benchmark_last_value = benchmark_value
+            elif benchmark_last_value is not None:
+                benchmark_value = benchmark_last_value
+                quality_flags.add("일부 SPY 기준값이 비어 있어 직전 사용 가능 가격으로 비교선을 이어 그렸습니다.")
+            if benchmark_value is not None:
+                benchmark_equity = benchmark_shares * benchmark_value
+
+        equity_curve.append(
+            EquityPoint(
+                date=current_date,
+                gross_equity=gross_equity,
+                net_equity=net_equity,
+                benchmark_equity=benchmark_equity,
+            )
+        )
 
     summary_metrics = _calculate_summary_metrics(
         Decimal(input_data.initial_capital),
@@ -613,6 +860,14 @@ def simulate_backtest(
         missing_execution_open_count,
         insufficient_history,
     )
+    if first_execution_date is not None and not any(point.benchmark_equity is not None for point in equity_curve):
+        quality_flags.add("SPY 첫 체결일 기준값이 없어 이번 실행에서는 비교선을 그리지 못했습니다.")
+        warning_events.append(
+            WarningEvent(
+                title="SPY 비교선 제외",
+                body="첫 체결일에 SPY 시작 가격을 확보하지 못해 이번 실행에서는 SPY 기준 비교선을 그리지 못했습니다.",
+            )
+        )
     return SimulationResult(
         state=PageState.SUCCESS,
         equity_curve=equity_curve,
@@ -621,5 +876,6 @@ def simulate_backtest(
         warnings=warning_events,
         data_quality_flags=sorted(quality_flags),
         summary_metrics=summary_metrics,
+        unavailable_reasons=[],
         error_message=None,
     )

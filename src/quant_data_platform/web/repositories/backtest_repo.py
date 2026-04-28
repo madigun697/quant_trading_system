@@ -33,6 +33,12 @@ class DailyCloseRow:
 
 
 @dataclass(frozen=True)
+class BenchmarkValueRow:
+    observation_date: date
+    value: Decimal | None
+
+
+@dataclass(frozen=True)
 class ReadinessStatus:
     ok: bool
     code: str
@@ -46,6 +52,15 @@ class BacktestRepository:
     def calendar_query(self) -> str:
         return """
             select observation_date
+            from stg.stg_benchmark_series
+            where benchmark_name = 'SPY'
+              and observation_date between %(start_date)s and %(end_date)s
+            order by observation_date
+        """
+
+    def benchmark_value_query(self) -> str:
+        return """
+            select observation_date, value
             from stg.stg_benchmark_series
             where benchmark_name = 'SPY'
               and observation_date between %(start_date)s and %(end_date)s
@@ -121,10 +136,7 @@ class BacktestRepository:
         mart_relations = (
             (f"mart.{get_strategy_preset(preset_id).mart_table}",)
             if preset_id is not None
-            else tuple(
-                f"mart.{preset.mart_table}"
-                for preset in STRATEGY_PRESETS.values()
-            )
+            else tuple(f"mart.{preset.mart_table}" for preset in STRATEGY_PRESETS.values())
         )
         return (
             "stg.stg_daily_prices",
@@ -198,6 +210,17 @@ class BacktestRepository:
         with postgres_connection() as conn, conn.cursor() as cur:
             cur.execute(self.calendar_query(), {"start_date": start_date, "end_date": end_date})
             return [row["observation_date"] for row in cur.fetchall()]
+
+    def fetch_spy_benchmark_values(self, start_date: date, end_date: date) -> list[BenchmarkValueRow]:
+        with postgres_connection() as conn, conn.cursor() as cur:
+            cur.execute(self.benchmark_value_query(), {"start_date": start_date, "end_date": end_date})
+            return [
+                BenchmarkValueRow(
+                    observation_date=row["observation_date"],
+                    value=row["value"],
+                )
+                for row in cur.fetchall()
+            ]
 
     def fetch_factor_rows(self, preset_id: StrategyPresetId, signal_dates: list[date]) -> list[FactorSnapshotRow]:
         if not signal_dates:

@@ -4,7 +4,7 @@ from datetime import date
 from decimal import Decimal
 
 from quant_data_platform.web.presets import StrategyPresetId, TransactionCostPreset, get_strategy_preset
-from quant_data_platform.web.repositories.backtest_repo import DailyCloseRow, ExecutionPriceRow, FactorSnapshotRow
+from quant_data_platform.web.repositories.backtest_repo import BenchmarkValueRow, DailyCloseRow, ExecutionPriceRow, FactorSnapshotRow
 from quant_data_platform.web.schemas import BacktestFormInput, PageState
 from quant_data_platform.web.services.engine import (
     execution_schedule,
@@ -93,8 +93,10 @@ def test_simulate_backtest_runs_buy_sell_sequence_and_costs() -> None:
     execution_rows = [
         ExecutionPriceRow("AAA", date(2024, 2, 1), Decimal("10")),
         ExecutionPriceRow("BBB", date(2024, 2, 1), Decimal("20")),
+        ExecutionPriceRow("SPY", date(2024, 2, 1), Decimal("100")),
         ExecutionPriceRow("AAA", date(2024, 3, 1), Decimal("11")),
         ExecutionPriceRow("BBB", date(2024, 3, 1), Decimal("25")),
+        ExecutionPriceRow("SPY", date(2024, 3, 1), Decimal("105")),
     ]
     daily_rows = [
         DailyCloseRow("AAA", date(2024, 2, 1), Decimal("10")),
@@ -104,12 +106,18 @@ def test_simulate_backtest_runs_buy_sell_sequence_and_costs() -> None:
         DailyCloseRow("BBB", date(2024, 2, 29), Decimal("24")),
         DailyCloseRow("BBB", date(2024, 3, 1), Decimal("25")),
     ]
+    benchmark_rows = [
+        BenchmarkValueRow(date(2024, 2, 1), Decimal("100")),
+        BenchmarkValueRow(date(2024, 2, 29), Decimal("104")),
+        BenchmarkValueRow(date(2024, 3, 1), Decimal("105")),
+    ]
     result = simulate_backtest(
         input_data=form,
         calendar_dates=calendar,
         factor_rows=factor_rows,
         execution_price_rows=execution_rows,
         daily_close_rows=daily_rows,
+        benchmark_rows=benchmark_rows,
         earliest_available_trade_date=date(2024, 1, 31),
         transaction_cost_rate=Decimal("0.005"),
     )
@@ -120,6 +128,7 @@ def test_simulate_backtest_runs_buy_sell_sequence_and_costs() -> None:
     assert result.summary_metrics["total_fees"] > 0
     assert result.summary_rows[0].selected_count == 1
     assert result.summary_rows[1].sold_count == 1
+    assert result.equity_curve[-1].benchmark_equity is not None
 
 
 def test_simulate_backtest_excludes_missing_factor_rows() -> None:
@@ -139,10 +148,12 @@ def test_simulate_backtest_excludes_missing_factor_rows() -> None:
         factor_rows=rows,
         execution_price_rows=[ExecutionPriceRow("AAA", date(2024, 2, 1), Decimal("10"))],
         daily_close_rows=[DailyCloseRow("AAA", date(2024, 2, 1), Decimal("10"))],
+        benchmark_rows=[BenchmarkValueRow(date(2024, 2, 1), Decimal("100"))],
         earliest_available_trade_date=date(2024, 1, 31),
         transaction_cost_rate=Decimal("0.005"),
     )
     assert result.state == PageState.NO_DATA
+    assert result.unavailable_reasons
 
 
 def test_simulate_backtest_returns_insufficient_history_when_all_signals_precede_data() -> None:
@@ -152,10 +163,12 @@ def test_simulate_backtest_returns_insufficient_history_when_all_signals_precede
         factor_rows=[],
         execution_price_rows=[],
         daily_close_rows=[],
+        benchmark_rows=[BenchmarkValueRow(date(2024, 2, 1), Decimal("100"))],
         earliest_available_trade_date=date(2024, 5, 31),
         transaction_cost_rate=Decimal("0.005"),
     )
     assert result.state == PageState.INSUFFICIENT_HISTORY
+    assert result.unavailable_reasons[0].code == "insufficient_history"
 
 
 def test_simulate_backtest_marks_all_null_factor_month_as_insufficient_history() -> None:
@@ -168,6 +181,7 @@ def test_simulate_backtest_marks_all_null_factor_month_as_insufficient_history()
         factor_rows=[FactorSnapshotRow("AAA", date(2024, 1, 31), 1, all_null_factors)],
         execution_price_rows=[ExecutionPriceRow("AAA", date(2024, 2, 1), Decimal("10"))],
         daily_close_rows=[DailyCloseRow("AAA", date(2024, 2, 1), Decimal("10"))],
+        benchmark_rows=[BenchmarkValueRow(date(2024, 2, 1), Decimal("100"))],
         earliest_available_trade_date=date(2024, 1, 31),
         transaction_cost_rate=Decimal("0.005"),
     )
@@ -196,7 +210,84 @@ def test_simulate_backtest_returns_error_when_sell_execution_price_is_missing() 
             DailyCloseRow("AAA", date(2024, 2, 1), Decimal("10")),
             DailyCloseRow("BBB", date(2024, 3, 1), Decimal("12")),
         ],
+        benchmark_rows=[BenchmarkValueRow(date(2024, 2, 1), Decimal("100")), BenchmarkValueRow(date(2024, 3, 1), Decimal("105"))],
         earliest_available_trade_date=date(2024, 1, 31),
         transaction_cost_rate=Decimal("0.005"),
     )
     assert result.state == PageState.ERROR
+    assert result.unavailable_reasons[0].code == "missing_rebalance_price"
+
+
+def test_simulate_backtest_rebalances_only_delta_for_overlapping_holdings() -> None:
+    form = make_form()
+    preset = get_strategy_preset(StrategyPresetId.VALUE_QUALITY)
+    strong = {factor.column: Decimal("2") for factor in preset.factor_specs}
+    medium = {factor.column: Decimal("1.5") for factor in preset.factor_specs}
+    weak = {factor.column: Decimal("1") for factor in preset.factor_specs}
+    calendar = [
+        date(2024, 1, 31),
+        date(2024, 2, 1),
+        date(2024, 2, 29),
+        date(2024, 3, 1),
+    ]
+    factor_rows = [
+        FactorSnapshotRow("AAA", date(2024, 1, 31), 1, strong),
+        FactorSnapshotRow("BBB", date(2024, 1, 31), 2, medium),
+        FactorSnapshotRow("AAA", date(2024, 2, 29), 1, strong),
+        FactorSnapshotRow("CCC", date(2024, 2, 29), 2, weak),
+    ]
+    execution_rows = [
+        ExecutionPriceRow("AAA", date(2024, 2, 1), Decimal("10")),
+        ExecutionPriceRow("BBB", date(2024, 2, 1), Decimal("20")),
+        ExecutionPriceRow("SPY", date(2024, 2, 1), Decimal("100")),
+        ExecutionPriceRow("AAA", date(2024, 3, 1), Decimal("12")),
+        ExecutionPriceRow("BBB", date(2024, 3, 1), Decimal("18")),
+        ExecutionPriceRow("CCC", date(2024, 3, 1), Decimal("15")),
+        ExecutionPriceRow("SPY", date(2024, 3, 1), Decimal("101")),
+    ]
+    daily_rows = [
+        DailyCloseRow("AAA", date(2024, 2, 1), Decimal("10")),
+        DailyCloseRow("BBB", date(2024, 2, 1), Decimal("20")),
+        DailyCloseRow("AAA", date(2024, 2, 29), Decimal("11")),
+        DailyCloseRow("BBB", date(2024, 2, 29), Decimal("19")),
+        DailyCloseRow("AAA", date(2024, 3, 1), Decimal("12")),
+        DailyCloseRow("BBB", date(2024, 3, 1), Decimal("18")),
+        DailyCloseRow("CCC", date(2024, 3, 1), Decimal("15")),
+    ]
+    result = simulate_backtest(
+        input_data=make_form(),
+        calendar_dates=calendar,
+        factor_rows=factor_rows,
+        execution_price_rows=execution_rows,
+        daily_close_rows=daily_rows,
+        benchmark_rows=[BenchmarkValueRow(date(2024, 2, 1), Decimal("100")), BenchmarkValueRow(date(2024, 2, 29), Decimal("100")), BenchmarkValueRow(date(2024, 3, 1), Decimal("101"))],
+        earliest_available_trade_date=date(2024, 1, 31),
+        transaction_cost_rate=Decimal("0.005"),
+    )
+    sell_symbols = [row.symbol for row in result.fill_rows if row.action == "SELL"]
+    buy_symbols = [row.symbol for row in result.fill_rows if row.action == "BUY"]
+    assert result.state == PageState.SUCCESS
+    assert sell_symbols.count("AAA") == 1
+    assert sell_symbols.count("BBB") == 1
+    assert buy_symbols.count("AAA") == 1
+    assert buy_symbols.count("CCC") == 1
+    assert result.summary_rows[-1].turnover < Decimal("2")
+
+
+def test_simulate_backtest_warns_when_benchmark_anchor_is_missing() -> None:
+    form = make_form()
+    preset = get_strategy_preset(StrategyPresetId.VALUE_QUALITY)
+    strong = {factor.column: Decimal("2") for factor in preset.factor_specs}
+    result = simulate_backtest(
+        input_data=form,
+        calendar_dates=[date(2024, 1, 31), date(2024, 2, 1)],
+        factor_rows=[FactorSnapshotRow("AAA", date(2024, 1, 31), 1, strong)],
+        execution_price_rows=[ExecutionPriceRow("AAA", date(2024, 2, 1), Decimal("10"))],
+        daily_close_rows=[DailyCloseRow("AAA", date(2024, 2, 1), Decimal("10"))],
+        benchmark_rows=[],
+        earliest_available_trade_date=date(2024, 1, 31),
+        transaction_cost_rate=Decimal("0.005"),
+    )
+    assert result.state == PageState.SUCCESS
+    assert all(point.benchmark_equity is None for point in result.equity_curve)
+    assert any(warning.title == "SPY 비교선 제외" for warning in result.warnings)

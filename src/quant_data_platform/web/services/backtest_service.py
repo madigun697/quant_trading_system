@@ -19,11 +19,14 @@ from quant_data_platform.web.repositories.backtest_repo import BacktestRepositor
 from quant_data_platform.web.schemas import (
     BacktestFormInput,
     BacktestPageContext,
+    CostDetail,
     EquityCurvePoint,
     PageState,
+    PresetDetail,
     SummaryMetric,
     TradeLogDetailRow,
     TradeLogSummaryRow,
+    UnavailableReason,
     WarningMessage,
     form_values_from_model,
 )
@@ -54,6 +57,7 @@ def _format_decimal(value: Decimal | float | int, digits: int = 2) -> str:
 def build_equity_curve_svg(points: list[EquityCurvePoint]) -> str | None:
     if len(points) < 2:
         return None
+
     width = 960
     height = 320
     padding_x = 48
@@ -63,40 +67,62 @@ def build_equity_curve_svg(points: list[EquityCurvePoint]) -> str | None:
 
     gross_values = [point.gross_equity for point in points]
     net_values = [point.net_equity for point in points]
-    min_value = float(min(min(gross_values), min(net_values)))
-    max_value = float(max(max(gross_values), max(net_values)))
+    benchmark_values = [point.benchmark_equity for point in points if point.benchmark_equity is not None]
+    all_values = [*gross_values, *net_values, *benchmark_values]
+    min_value = float(min(all_values))
+    max_value = float(max(all_values))
     if max_value == min_value:
         max_value += 1.0
 
-    def path_for(values: list[float]) -> str:
+    def path_for(values: list[float | None]) -> str:
         commands: list[str] = []
+        drawing = False
         for index, value in enumerate(values):
+            if value is None:
+                drawing = False
+                continue
             x = padding_x + (usable_width * index / max(len(values) - 1, 1))
             y_ratio = (value - min_value) / (max_value - min_value)
             y = height - padding_y - (usable_height * y_ratio)
-            commands.append(f"{'M' if index == 0 else 'L'} {x:.2f} {y:.2f}")
+            commands.append(f"{'M' if not drawing else 'L'} {x:.2f} {y:.2f}")
+            drawing = True
         return " ".join(commands)
 
     gross_path = path_for([float(value) for value in gross_values])
     net_path = path_for([float(value) for value in net_values])
+    benchmark_path = path_for([float(value) if value is not None else None for value in (point.benchmark_equity for point in points)])
     start_label = escape(points[0].date)
     end_label = escape(points[-1].date)
+    benchmark_path_markup = (
+        f'<path d="{benchmark_path}" fill="none" stroke="#b86830" stroke-width="2.4" '
+        'stroke-dasharray="8 6" stroke-linejoin="round" stroke-linecap="round"></path>'
+        if benchmark_values and benchmark_path
+        else ""
+    )
+    benchmark_legend_markup = (
+        '<rect x="180" y="-12" width="12" height="3" rx="1.5" fill="#b86830"></rect>'
+        '<text x="198" y="-8" fill="#7c4a24" font-size="12">SPY</text>'
+        if benchmark_values
+        else ""
+    )
     return f"""
 <svg viewBox="0 0 {width} {height}" class="equity-chart" role="img" aria-labelledby="equity-chart-title equity-chart-desc">
-  <title id="equity-chart-title">Gross vs Net 누적 자산 곡선</title>
-  <desc id="equity-chart-desc">백테스트 기간 동안 거래비용 전후 자산 변화를 비교하는 차트입니다.</desc>
+  <title id="equity-chart-title">Net, SPY, Gross 누적 자산 곡선</title>
+  <desc id="equity-chart-desc">전략 순성과와 SPY 비교선, 거래비용 전 성과를 함께 보여 주는 차트입니다.</desc>
   <rect x="0" y="0" width="{width}" height="{height}" rx="18" fill="rgba(247, 243, 233, 0.72)"></rect>
   <line x1="{padding_x}" y1="{height - padding_y}" x2="{width - padding_x}" y2="{height - padding_y}" stroke="#8d8778" stroke-width="1.2"></line>
   <line x1="{padding_x}" y1="{padding_y}" x2="{padding_x}" y2="{height - padding_y}" stroke="#8d8778" stroke-width="1.2"></line>
-  <path d="{gross_path}" fill="none" stroke="#4b7f52" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"></path>
-  <path d="{net_path}" fill="none" stroke="#102f3f" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"></path>
+  <path d="{gross_path}" fill="none" stroke="#8fa59b" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"></path>
+  {benchmark_path_markup}
+  <path d="{net_path}" fill="none" stroke="#102f3f" stroke-width="3.4" stroke-linejoin="round" stroke-linecap="round"></path>
   <text x="{padding_x}" y="{padding_y - 6}" fill="#6b6658" font-size="12">시작 {start_label}</text>
   <text x="{width - padding_x}" y="{padding_y - 6}" fill="#6b6658" font-size="12" text-anchor="end">종료 {end_label}</text>
   <g transform="translate({padding_x}, {height - 8})">
-    <rect x="0" y="-12" width="12" height="3" rx="1.5" fill="#4b7f52"></rect>
-    <text x="18" y="-8" fill="#254031" font-size="12">Gross</text>
-    <rect x="90" y="-12" width="12" height="3" rx="1.5" fill="#102f3f"></rect>
-    <text x="108" y="-8" fill="#102f3f" font-size="12">Net</text>
+    <rect x="0" y="-12" width="12" height="3" rx="1.5" fill="#102f3f"></rect>
+    <text x="18" y="-8" fill="#102f3f" font-size="12">Net</text>
+    <rect x="90" y="-12" width="12" height="3" rx="1.5" fill="#8fa59b"></rect>
+    <text x="108" y="-8" fill="#496057" font-size="12">Gross</text>
+    {benchmark_legend_markup}
   </g>
 </svg>
 """.strip()
@@ -137,11 +163,14 @@ class BacktestPageService:
             top_n=10,
             transaction_cost_preset=TransactionCostPreset.CONSERVATIVE,
         )
+        form_values = form_values_from_model(default_form)
         return BacktestPageContext(
             state=PageState.EMPTY,
-            form_values=form_values_from_model(default_form),
+            form_values=form_values,
             preset_options=list_preset_options(),
             transaction_cost_options=list_cost_options(),
+            selected_preset_detail=self._selected_preset_detail(form_values["strategy_preset"]),
+            selected_cost_detail=self._selected_cost_detail(form_values["transaction_cost_preset"]),
         )
 
     def error_context(
@@ -150,15 +179,20 @@ class BacktestPageService:
         message: str,
         field_errors: dict[str, str] | None = None,
         http_status_code: int = 400,
+        unavailable_reasons: list[UnavailableReason] | None = None,
+        form_values: dict[str, str] | None = None,
     ) -> BacktestPageContext:
-        base_form = form_values_from_model(form) if form else self.empty_context().form_values
+        base_form = form_values or (form_values_from_model(form) if form else self.empty_context().form_values)
         return BacktestPageContext(
             state=PageState.ERROR,
             form_values=base_form,
             preset_options=list_preset_options(),
             transaction_cost_options=list_cost_options(),
+            selected_preset_detail=self._selected_preset_detail(base_form["strategy_preset"]),
+            selected_cost_detail=self._selected_cost_detail(base_form["transaction_cost_preset"]),
             error_message=message,
             field_errors=field_errors or {},
+            unavailable_reasons=unavailable_reasons or [],
             http_status_code=http_status_code,
         )
 
@@ -186,7 +220,7 @@ class BacktestPageService:
             spy_calendar = self.repository.fetch_spy_calendar(calendar_start, calendar_end)
             signal_dates = month_end_signal_dates(spy_calendar, form.start_date, form.end_date)
             factor_rows = self.repository.fetch_factor_rows(form.strategy_preset, signal_dates)
-            all_factor_symbols = sorted({row.symbol for row in factor_rows})
+            all_factor_symbols = sorted({row.symbol for row in factor_rows} | {"SPY"})
             execution_dates = [
                 spy_calendar[index + 1]
                 for index, current_date in enumerate(spy_calendar[:-1])
@@ -196,12 +230,14 @@ class BacktestPageService:
             earliest_available = self.repository.fetch_earliest_available_trade_date(form.strategy_preset)
             selected_symbols = self._selected_symbols_for_daily_closes(form, spy_calendar, factor_rows, execution_price_rows)
             daily_close_rows = self.repository.fetch_daily_closes(selected_symbols, form.start_date, form.end_date)
+            benchmark_rows = self.repository.fetch_spy_benchmark_values(form.start_date, form.end_date)
             simulation = simulate_backtest(
                 input_data=form,
                 calendar_dates=spy_calendar,
                 factor_rows=factor_rows,
                 execution_price_rows=execution_price_rows,
                 daily_close_rows=daily_close_rows,
+                benchmark_rows=benchmark_rows,
                 earliest_available_trade_date=earliest_available,
                 transaction_cost_rate=Decimal(str(TRANSACTION_COST_BPS[form.transaction_cost_preset])),
             )
@@ -247,6 +283,15 @@ class BacktestPageService:
         return self.error_context(
             form=form,
             message=self._dependency_error_message(readiness),
+            unavailable_reasons=[
+                UnavailableReason(
+                    code=readiness.code,
+                    title="실행 전 확인이 필요합니다",
+                    detail=self._dependency_error_message(readiness),
+                    facts=[f"점검 대상: {relation}" for relation in readiness.checked_relations[:3]],
+                    suggestions=self._dependency_error_suggestions(readiness),
+                )
+            ],
             http_status_code=503 if readiness.code != "database_error" else 500,
         )
 
@@ -264,15 +309,41 @@ class BacktestPageService:
             )
         return "백테스트 쿼리 실행 중 데이터베이스 오류가 발생했습니다. 연결 상태와 서버 로그를 함께 확인해 주세요."
 
+    def _dependency_error_suggestions(self, readiness: ReadinessStatus) -> list[str]:
+        if readiness.code == "database_unreachable":
+            return [
+                "Docker 서비스가 꺼져 있다면 postgres와 backtest-web을 함께 실행해 주세요.",
+                "로컬 실행이라면 POSTGRES_HOST와 POSTGRES_PORT가 compose Postgres를 가리키는지 확인해 주세요.",
+            ]
+        if readiness.code in {"missing_schema", "missing_relation", "unqueryable_relation"}:
+            return [
+                "stg와 mart 적재가 끝났는지 확인해 주세요.",
+                "최근 dbt 실행이 실패하지 않았는지 서버 로그를 확인해 주세요.",
+            ]
+        return ["데이터베이스 로그와 애플리케이션 로그를 함께 확인해 주세요."]
+
     def _context_from_simulation(self, form: BacktestFormInput, simulation: SimulationResult) -> BacktestPageContext:
+        form_values = form_values_from_model(form)
         if simulation.state in {PageState.NO_DATA, PageState.INSUFFICIENT_HISTORY, PageState.ERROR}:
             return BacktestPageContext(
                 state=simulation.state,
-                form_values=form_values_from_model(form),
+                form_values=form_values,
                 preset_options=list_preset_options(),
                 transaction_cost_options=list_cost_options(),
+                selected_preset_detail=self._selected_preset_detail(form_values["strategy_preset"]),
+                selected_cost_detail=self._selected_cost_detail(form_values["transaction_cost_preset"]),
                 warnings=[WarningMessage(title=warning.title, body=warning.body, tone=warning.tone) for warning in simulation.warnings],
                 data_quality_flags=simulation.data_quality_flags,
+                unavailable_reasons=[
+                    UnavailableReason(
+                        code=reason.code,
+                        title=reason.title,
+                        detail=reason.detail,
+                        facts=reason.facts,
+                        suggestions=reason.suggestions,
+                    )
+                    for reason in simulation.unavailable_reasons
+                ],
                 error_message=simulation.error_message,
                 http_status_code=400 if simulation.state == PageState.ERROR else 200,
             )
@@ -283,6 +354,7 @@ class BacktestPageService:
                 date=point.date.isoformat(),
                 gross_equity=float(point.gross_equity),
                 net_equity=float(point.net_equity),
+                benchmark_equity=float(point.benchmark_equity) if point.benchmark_equity is not None else None,
             )
             for point in simulation.equity_curve
         ]
@@ -315,20 +387,23 @@ class BacktestPageService:
             )
             for row in simulation.fill_rows
         ]
-        context = BacktestPageContext(
+        return BacktestPageContext(
             state=simulation.state,
-            form_values=form_values_from_model(form),
+            form_values=form_values,
             preset_options=list_preset_options(),
             transaction_cost_options=list_cost_options(),
+            selected_preset_detail=self._selected_preset_detail(form_values["strategy_preset"]),
+            selected_cost_detail=self._selected_cost_detail(form_values["transaction_cost_preset"]),
             summary_metrics=summary_metrics,
             equity_curve=equity_points,
             trade_log_summary=summary_rows,
             trade_log_rows=detail_rows,
             warnings=[WarningMessage(title=warning.title, body=warning.body, tone=warning.tone) for warning in simulation.warnings],
             data_quality_flags=simulation.data_quality_flags,
+            unavailable_reasons=[],
+            benchmark_available=any(point.benchmark_equity is not None for point in equity_points),
             equity_curve_svg=build_equity_curve_svg(equity_points),
         )
-        return context
 
     def _build_summary_metrics(self, metrics: dict[str, Any]) -> list[SummaryMetric]:
         return [
@@ -341,7 +416,19 @@ class BacktestPageService:
             SummaryMetric(key="trade_count", label="거래 수", value=str(metrics["trade_count"]), tooltip="BUY와 SELL 상세 체결 건수를 합산한 값입니다."),
             SummaryMetric(key="win_rate", label="승률", value=_format_percent(metrics["win_rate"]), tooltip="실현 손익 기준으로 이긴 거래 비중입니다."),
             SummaryMetric(key="expected_value", label="기대값(EV)", value=_format_currency(metrics["expected_value"]), tooltip="실현 거래 1건당 평균 손익입니다."),
-            SummaryMetric(key="turnover", label="회전율", value=_format_percent(metrics["turnover"]), tooltip="누적 거래대금을 초기 자본으로 나눈 값입니다."),
+            SummaryMetric(key="turnover", label="누적 거래대금 / 초기자본", value=_format_percent(metrics["turnover"]), tooltip="전체 기간 동안 실제로 거래한 총금액을 초기 자본과 비교한 값입니다."),
             SummaryMetric(key="total_fees", label="총 거래비용", value=_format_currency(metrics["total_fees"]), tooltip="매수와 매도에서 차감된 총비용입니다."),
             SummaryMetric(key="average_holding_period", label="평균 보유기간", value=f"{Decimal(metrics['average_holding_period']):.1f}일", tooltip="실현 매도 기준 평균 보유 일수입니다."),
         ]
+
+    def _selected_preset_detail(self, preset_id: str) -> PresetDetail | None:
+        for option in list_preset_options():
+            if option["id"] == preset_id:
+                return PresetDetail.model_validate(option)
+        return None
+
+    def _selected_cost_detail(self, cost_id: str) -> CostDetail | None:
+        for option in list_cost_options():
+            if option["id"] == cost_id:
+                return CostDetail.model_validate(option)
+        return None
