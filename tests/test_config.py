@@ -20,3 +20,9 @@ def test_universe_defaults() -> None:
     assert settings.default_cohort == "us_liquidity_700_v1"
     assert settings.universe_buffer_cohort == "us_liquidity_900_buffer_v1"
     assert settings.universe_target_size == 700
+    assert settings.benchmark_market_symbols == ("SPY",)
+
+
+def test_benchmark_market_symbols_accept_csv() -> None:
+    settings = Settings(BENCHMARK_MARKET_SYMBOLS="spy, qqq , dia")
+    assert settings.benchmark_market_symbols == ("SPY", "QQQ", "DIA")

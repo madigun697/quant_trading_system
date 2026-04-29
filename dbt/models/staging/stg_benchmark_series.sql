@@ -14,10 +14,6 @@ spy as (
         source
     from {{ ref('stg_daily_prices') }}
     where symbol = 'SPY'
-    and effective_as_of = (
-        select max(effective_as_of) from {{ ref('stg_daily_prices') }}
-        where symbol = 'SPY'
-    )
 )
 select * from fred
 union all

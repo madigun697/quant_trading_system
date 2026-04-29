@@ -247,6 +247,22 @@ def _chunked(values: list[str], size: int) -> list[list[str]]:
     return [values[index : index + size] for index in range(0, len(values), size)]
 
 
+def _normalize_symbols(symbols: Iterable[str]) -> list[str]:
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for symbol in symbols:
+        token = str(symbol).strip().upper()
+        if not token or token in seen:
+            continue
+        seen.add(token)
+        normalized.append(token)
+    return normalized
+
+
+def _merge_benchmark_market_symbols(symbols: Iterable[str], settings: Settings) -> list[str]:
+    return _normalize_symbols([*symbols, *settings.benchmark_market_symbols])
+
+
 def _resolve_full_universe_symbols(conn) -> list[str]:
     candidates = fetch_listing_candidates(conn)
     symbols = {
@@ -741,6 +757,7 @@ def run_market_backfill(
                 )
             else:
                 symbols = fetch_universe_symbols(conn, cohort, snapshot_as_of=snapshot_as_of)
+    symbols = _merge_benchmark_market_symbols(symbols or [], settings)
     effective_start = start_date
     if mode == "recent" and effective_start is None:
         effective_start = discovery_start_date(snapshot_as_of, settings.liquidity_discovery_days)
@@ -755,6 +772,7 @@ def run_market_backfill(
                     cohort,
                     snapshot_as_of=snapshot_as_of,
                 )
+            ordered_symbols = _merge_benchmark_market_symbols(ordered_symbols, settings)
             resource_name = f"yfinance_history:{'full_universe' if full_universe else cohort}"
             offset = 0 if reset_cursor else int(get_ingestion_watermark(conn, source_name="yfinance", resource_name=resource_name) or "0")
             chunk_symbols = ordered_symbols[offset : offset + request_budget]
@@ -769,12 +787,12 @@ def run_market_backfill(
             )
             conn.commit()
         return {
-            "symbol_count": len(chunk_symbols),
             "processed_offset_start": offset,
             "processed_offset_end": next_offset,
             "remaining_symbols": max(len(ordered_symbols) - next_offset, 0),
             "full_universe": int(full_universe),
             **price_stats,
+            "symbol_count": len(chunk_symbols),
         }
     # listing_status: called internally — required for backfill DAGs that do not have a dedicated listing_status task. DAG-level task removed in dag split to avoid duplicate call.
     listing_rows = ingest_alpha_vantage_listing_status(settings=settings)
@@ -801,7 +819,7 @@ def run_market_backfill(
             price_stats["market_data_fallback"] = 1
     else:
         price_stats = ingest_yfinance_prices(symbols, start_date=effective_start, end_date=end_date, settings=settings)
-    return {"listing_rows": listing_rows, "symbol_count": len(symbols), "full_universe": int(full_universe), **price_stats}
+    return {"listing_rows": listing_rows, "full_universe": int(full_universe), **price_stats, "symbol_count": len(symbols)}
 
 
 def run_fundamental_backfill(

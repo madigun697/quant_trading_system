@@ -196,11 +196,11 @@ def test_run_market_backfill_recent_uses_batched_tiingo(monkeypatch) -> None:
         settings=settings,
     )
 
-    assert calls["symbols"] == ["AAPL", "MSFT", "NVDA"]
+    assert calls["symbols"] == ["AAPL", "MSFT", "NVDA", "SPY"]
     assert calls["batch_size"] == 200
     assert result["listing_rows"] == 123
     assert result["price_rows"] == 30
-    assert result["symbol_count"] == 3
+    assert result["symbol_count"] == 4
 
 
 def test_run_market_backfill_recent_falls_back_to_yfinance_on_tiingo_429(monkeypatch) -> None:
@@ -266,9 +266,32 @@ def test_run_market_backfill_full_universe_filters_common_stock_symbols(monkeypa
         settings=Settings(TIINGO_DISCOVERY_BATCH_SIZE=200),
     )
 
-    assert calls["symbols"] == ["AAPL", "MSFT"]
+    assert calls["symbols"] == ["AAPL", "MSFT", "SPY"]
     assert result["full_universe"] == 1
-    assert result["symbol_count"] == 2
+    assert result["symbol_count"] == 3
+
+
+def test_run_market_backfill_dedupes_explicit_symbols_with_benchmarks(monkeypatch) -> None:
+    calls: dict[str, object] = {}
+
+    monkeypatch.setattr("quant_data_platform.pipeline.postgres_connection", _fake_postgres_connection)
+    monkeypatch.setattr("quant_data_platform.pipeline.ingest_alpha_vantage_listing_status", lambda settings=None: 123)
+
+    def _fake_ingest_yfinance_prices(symbols, start_date=None, end_date=None, settings=None):
+        calls["symbols"] = list(symbols)
+        return {"price_rows": 20, "action_rows": 2, "request_count": 1, "symbol_count": len(list(symbols)), "empty_symbols": 0}
+
+    monkeypatch.setattr("quant_data_platform.pipeline.ingest_yfinance_prices", _fake_ingest_yfinance_prices)
+
+    result = run_market_backfill(
+        symbols=["spy", "AAPL", "SPY"],
+        mode="full",
+        end_date=date(2026, 4, 23),
+        settings=Settings(BENCHMARK_MARKET_SYMBOLS="SPY,QQQ"),
+    )
+
+    assert calls["symbols"] == ["SPY", "AAPL", "QQQ"]
+    assert result["symbol_count"] == 3
 
 
 def test_refresh_monthly_universe_snapshots_replaces_active_members_with_latest_snapshot(monkeypatch) -> None:

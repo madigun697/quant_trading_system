@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -37,9 +37,23 @@ class Settings(BaseSettings):
     tiingo_discovery_batch_size: int = Field(default=200, alias="TIINGO_DISCOVERY_BATCH_SIZE")
     yfinance_batch_size: int = Field(default=100, alias="YFINANCE_BATCH_SIZE")
     sec_daily_request_budget: int = Field(default=50, alias="SEC_DAILY_REQUEST_BUDGET")
+    benchmark_market_symbols: tuple[str, ...] = Field(default=("SPY",), alias="BENCHMARK_MARKET_SYMBOLS")
     yfinance_timeout_seconds: float = Field(default=30.0, alias="YFINANCE_TIMEOUT_SECONDS")
     alpha_vantage_throttle_seconds: float = Field(default=15.0, alias="ALPHA_VANTAGE_THROTTLE_SECONDS")
     tiingo_throttle_seconds: float = Field(default=1.0, alias="TIINGO_THROTTLE_SECONDS")
+
+    @field_validator("benchmark_market_symbols", mode="before")
+    @classmethod
+    def _normalize_benchmark_market_symbols(cls, value: object) -> tuple[str, ...] | object:
+        if value is None:
+            return ("SPY",)
+        if isinstance(value, str):
+            tokens = [token.strip().upper() for token in value.split(",") if token.strip()]
+            return tuple(tokens or ["SPY"])
+        if isinstance(value, (list, tuple, set)):
+            tokens = [str(token).strip().upper() for token in value if str(token).strip()]
+            return tuple(tokens or ["SPY"])
+        return value
 
     @property
     def postgres_dsn(self) -> str:
