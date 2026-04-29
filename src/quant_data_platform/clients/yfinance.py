@@ -82,23 +82,40 @@ def parse_history_payload(payload: list[dict[str, Any]], *, symbol: str) -> tupl
         if trade_date is None:
             continue
 
+        open_value = _to_decimal(item.get("Open"))
+        high_value = _to_decimal(item.get("High"))
+        low_value = _to_decimal(item.get("Low"))
         dividend_amount = _to_decimal(item.get("Dividends")) or Decimal("0")
         split_coefficient = _to_decimal(item.get("Stock Splits")) or Decimal("1")
         close = _to_decimal(item.get("Close"))
+        adjusted_close = _to_decimal(item.get("Adj Close")) or close
+        volume = _to_int(item.get("Volume"))
+
+        if (
+            open_value is None
+            and high_value is None
+            and low_value is None
+            and close is None
+            and adjusted_close is None
+            and volume is None
+            and dividend_amount == Decimal("0")
+            and split_coefficient == Decimal("1")
+        ):
+            continue
 
         price_rows.append(
             {
                 "symbol": symbol,
                 "trade_date": trade_date,
-                "open": _to_decimal(item.get("Open")),
-                "high": _to_decimal(item.get("High")),
-                "low": _to_decimal(item.get("Low")),
+                "open": open_value,
+                "high": high_value,
+                "low": low_value,
                 "close": close,
                 "adjusted_open": None,
                 "adjusted_high": None,
                 "adjusted_low": None,
-                "adjusted_close": _to_decimal(item.get("Adj Close")) or close,
-                "volume": _to_int(item.get("Volume")),
+                "adjusted_close": adjusted_close,
+                "volume": volume,
                 "adjusted_volume": None,
                 "dividend_amount": dividend_amount,
                 "split_coefficient": split_coefficient,

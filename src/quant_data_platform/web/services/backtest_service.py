@@ -9,11 +9,16 @@ from typing import Any
 import psycopg
 from quant_data_platform.web.presets import (
     TRANSACTION_COST_BPS,
+    MarketTimingOverlayId,
+    SafeAssetSymbol,
     StrategyPresetId,
     TransactionCostPreset,
+    get_market_timing_overlay,
     get_strategy_preset,
     list_cost_options,
+    list_overlay_options,
     list_preset_options,
+    list_safe_asset_options,
 )
 from quant_data_platform.web.repositories.backtest_repo import BacktestRepository, ReadinessStatus
 from quant_data_platform.web.schemas import (
@@ -21,8 +26,10 @@ from quant_data_platform.web.schemas import (
     BacktestPageContext,
     CostDetail,
     EquityCurvePoint,
+    OverlayDetail,
     PageState,
     PresetDetail,
+    SafeAssetDetail,
     SummaryMetric,
     TradeLogDetailRow,
     TradeLogSummaryRow,
@@ -157,6 +164,8 @@ class BacktestPageService:
     def empty_context(self, today: date | None = None) -> BacktestPageContext:
         default_form = BacktestFormInput(
             strategy_preset=StrategyPresetId.VALUE_QUALITY,
+            market_timing_overlay=MarketTimingOverlayId.NONE,
+            safe_asset_symbol=SafeAssetSymbol.SGOV,
             start_date=(today or date.today()) - timedelta(days=365 * 5),
             end_date=today or date.today(),
             initial_capital=Decimal("100000"),
@@ -168,8 +177,12 @@ class BacktestPageService:
             state=PageState.EMPTY,
             form_values=form_values,
             preset_options=list_preset_options(),
+            overlay_options=list_overlay_options(),
+            safe_asset_options=list_safe_asset_options(),
             transaction_cost_options=list_cost_options(),
             selected_preset_detail=self._selected_preset_detail(form_values["strategy_preset"]),
+            selected_overlay_detail=self._selected_overlay_detail(form_values["market_timing_overlay"]),
+            selected_safe_asset_detail=self._selected_safe_asset_detail(form_values["safe_asset_symbol"]),
             selected_cost_detail=self._selected_cost_detail(form_values["transaction_cost_preset"]),
         )
 
@@ -187,8 +200,12 @@ class BacktestPageService:
             state=PageState.ERROR,
             form_values=base_form,
             preset_options=list_preset_options(),
+            overlay_options=list_overlay_options(),
+            safe_asset_options=list_safe_asset_options(),
             transaction_cost_options=list_cost_options(),
             selected_preset_detail=self._selected_preset_detail(base_form["strategy_preset"]),
+            selected_overlay_detail=self._selected_overlay_detail(base_form["market_timing_overlay"]),
+            selected_safe_asset_detail=self._selected_safe_asset_detail(base_form["safe_asset_symbol"]),
             selected_cost_detail=self._selected_cost_detail(base_form["transaction_cost_preset"]),
             error_message=message,
             field_errors=field_errors or {},
@@ -204,6 +221,8 @@ class BacktestPageService:
             freshness_token = self.repository.fetch_freshness_token(form.strategy_preset)
             cache_key = (
                 form.strategy_preset.value,
+                form.market_timing_overlay.value,
+                form.safe_asset_symbol.value,
                 form.start_date.isoformat(),
                 form.end_date.isoformat(),
                 str(form.initial_capital),
@@ -220,16 +239,21 @@ class BacktestPageService:
             spy_calendar = self.repository.fetch_spy_calendar(calendar_start, calendar_end)
             signal_dates = month_end_signal_dates(spy_calendar, form.start_date, form.end_date)
             factor_rows = self.repository.fetch_factor_rows(form.strategy_preset, signal_dates)
-            all_factor_symbols = sorted({row.symbol for row in factor_rows} | {"SPY"})
-            execution_dates = [
+            monthly_execution_dates = [
                 spy_calendar[index + 1]
                 for index, current_date in enumerate(spy_calendar[:-1])
                 if current_date in signal_dates and spy_calendar[index + 1] <= form.end_date
             ]
-            execution_price_rows = self.repository.fetch_execution_prices(all_factor_symbols, execution_dates)
+            all_factor_symbols = sorted({row.symbol for row in factor_rows} | {"SPY"})
+            monthly_execution_price_rows = self.repository.fetch_execution_prices(all_factor_symbols, monthly_execution_dates)
             earliest_available = self.repository.fetch_earliest_available_trade_date(form.strategy_preset)
-            selected_symbols = self._selected_symbols_for_daily_closes(form, spy_calendar, factor_rows, execution_price_rows)
-            daily_close_rows = self.repository.fetch_daily_closes(selected_symbols, form.start_date, form.end_date)
+            selected_symbols = self._selected_symbols_for_daily_closes(form, spy_calendar, factor_rows, monthly_execution_price_rows)
+            support_symbols = sorted(set(selected_symbols) | {"SPY", "VT", "IEF", form.safe_asset_symbol.value})
+            calendar_trade_dates = [calendar_date for calendar_date in spy_calendar if form.start_date <= calendar_date <= form.end_date]
+            support_execution_price_rows = self.repository.fetch_execution_prices(support_symbols, calendar_trade_dates)
+            execution_price_rows = self._merge_execution_rows(monthly_execution_price_rows, support_execution_price_rows)
+            price_buffer_start = self._price_buffer_start(form)
+            daily_close_rows = self.repository.fetch_daily_closes(support_symbols, price_buffer_start, form.end_date)
             benchmark_rows = self.repository.fetch_spy_benchmark_values(form.start_date, form.end_date)
             simulation = simulate_backtest(
                 input_data=form,
@@ -246,6 +270,19 @@ class BacktestPageService:
         context = self._context_from_simulation(form, simulation)
         self._cache.set(cache_key, context)
         return context
+
+    def _merge_execution_rows(self, *groups: list[Any]) -> list[Any]:
+        merged: dict[tuple[str, date], Any] = {}
+        for group in groups:
+            for row in group:
+                merged[(row.symbol, row.trade_date)] = row
+        return list(merged.values())
+
+    def _price_buffer_start(self, form: BacktestFormInput) -> date:
+        factor_buffer = self.repository.compute_factor_buffer_start(form.strategy_preset, form.start_date)
+        overlay_buffer = get_market_timing_overlay(form.market_timing_overlay).lookback_days
+        overlay_start = form.start_date - timedelta(days=overlay_buffer)
+        return min(factor_buffer, overlay_start)
 
     def _selected_symbols_for_daily_closes(
         self,
@@ -302,9 +339,9 @@ class BacktestPageService:
                 "Docker 경로라면 `docker compose up -d postgres backtest-web`로 서비스를 띄워 주세요. "
                 "로컬 `uv run` 경로라면 `POSTGRES_HOST=127.0.0.1 POSTGRES_PORT=55432`를 지정해 compose Postgres에 연결해야 합니다."
             )
-        if readiness.code in {"missing_schema", "missing_relation", "unqueryable_relation"}:
+        if readiness.code in {"missing_schema", "missing_relation", "unqueryable_relation", "missing_support_symbol_data"}:
             return (
-                "데이터베이스 연결은 되었지만 백테스트용 mart/stg 데이터가 아직 준비되지 않았습니다. "
+                "데이터베이스 연결은 되었지만 백테스트용 mart/stg 또는 지원 심볼 데이터가 아직 준비되지 않았습니다. "
                 "Airflow 적재와 dbt 모델 실행이 끝났는지 확인해 주세요."
             )
         return "백테스트 쿼리 실행 중 데이터베이스 오류가 발생했습니다. 연결 상태와 서버 로그를 함께 확인해 주세요."
@@ -320,6 +357,11 @@ class BacktestPageService:
                 "stg와 mart 적재가 끝났는지 확인해 주세요.",
                 "최근 dbt 실행이 실패하지 않았는지 서버 로그를 확인해 주세요.",
             ]
+        if readiness.code == "missing_support_symbol_data":
+            return [
+                "SPY, VT, IEF, SGOV, JPST 지원 심볼의 시장 데이터 백필이 끝났는지 확인해 주세요.",
+                "support symbol 적재 후 stg와 int 모델을 다시 실행해 주세요.",
+            ]
         return ["데이터베이스 로그와 애플리케이션 로그를 함께 확인해 주세요."]
 
     def _context_from_simulation(self, form: BacktestFormInput, simulation: SimulationResult) -> BacktestPageContext:
@@ -329,8 +371,12 @@ class BacktestPageService:
                 state=simulation.state,
                 form_values=form_values,
                 preset_options=list_preset_options(),
+                overlay_options=list_overlay_options(),
+                safe_asset_options=list_safe_asset_options(),
                 transaction_cost_options=list_cost_options(),
                 selected_preset_detail=self._selected_preset_detail(form_values["strategy_preset"]),
+                selected_overlay_detail=self._selected_overlay_detail(form_values["market_timing_overlay"]),
+                selected_safe_asset_detail=self._selected_safe_asset_detail(form_values["safe_asset_symbol"]),
                 selected_cost_detail=self._selected_cost_detail(form_values["transaction_cost_preset"]),
                 warnings=[WarningMessage(title=warning.title, body=warning.body, tone=warning.tone) for warning in simulation.warnings],
                 data_quality_flags=simulation.data_quality_flags,
@@ -391,8 +437,12 @@ class BacktestPageService:
             state=simulation.state,
             form_values=form_values,
             preset_options=list_preset_options(),
+            overlay_options=list_overlay_options(),
+            safe_asset_options=list_safe_asset_options(),
             transaction_cost_options=list_cost_options(),
             selected_preset_detail=self._selected_preset_detail(form_values["strategy_preset"]),
+            selected_overlay_detail=self._selected_overlay_detail(form_values["market_timing_overlay"]),
+            selected_safe_asset_detail=self._selected_safe_asset_detail(form_values["safe_asset_symbol"]),
             selected_cost_detail=self._selected_cost_detail(form_values["transaction_cost_preset"]),
             summary_metrics=summary_metrics,
             equity_curve=equity_points,
@@ -425,6 +475,18 @@ class BacktestPageService:
         for option in list_preset_options():
             if option["id"] == preset_id:
                 return PresetDetail.model_validate(option)
+        return None
+
+    def _selected_overlay_detail(self, overlay_id: str) -> OverlayDetail | None:
+        for option in list_overlay_options():
+            if option["id"] == overlay_id:
+                return OverlayDetail.model_validate(option)
+        return None
+
+    def _selected_safe_asset_detail(self, safe_asset_id: str) -> SafeAssetDetail | None:
+        for option in list_safe_asset_options():
+            if option["id"] == safe_asset_id:
+                return SafeAssetDetail.model_validate(option)
         return None
 
     def _selected_cost_detail(self, cost_id: str) -> CostDetail | None:

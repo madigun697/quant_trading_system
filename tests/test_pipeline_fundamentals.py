@@ -196,11 +196,11 @@ def test_run_market_backfill_recent_uses_batched_tiingo(monkeypatch) -> None:
         settings=settings,
     )
 
-    assert calls["symbols"] == ["AAPL", "MSFT", "NVDA", "SPY"]
+    assert calls["symbols"] == ["AAPL", "MSFT", "NVDA", "SPY", "VT", "IEF", "SGOV", "JPST"]
     assert calls["batch_size"] == 200
     assert result["listing_rows"] == 123
     assert result["price_rows"] == 30
-    assert result["symbol_count"] == 4
+    assert result["symbol_count"] == 8
 
 
 def test_run_market_backfill_recent_falls_back_to_yfinance_on_tiingo_429(monkeypatch) -> None:
@@ -266,12 +266,12 @@ def test_run_market_backfill_full_universe_filters_common_stock_symbols(monkeypa
         settings=Settings(TIINGO_DISCOVERY_BATCH_SIZE=200),
     )
 
-    assert calls["symbols"] == ["AAPL", "MSFT", "SPY"]
+    assert calls["symbols"] == ["AAPL", "MSFT", "SPY", "VT", "IEF", "SGOV", "JPST"]
     assert result["full_universe"] == 1
-    assert result["symbol_count"] == 3
+    assert result["symbol_count"] == 7
 
 
-def test_run_market_backfill_dedupes_explicit_symbols_with_benchmarks(monkeypatch) -> None:
+def test_run_market_backfill_preserves_explicit_symbols_without_support_merge(monkeypatch) -> None:
     calls: dict[str, object] = {}
 
     monkeypatch.setattr("quant_data_platform.pipeline.postgres_connection", _fake_postgres_connection)
@@ -287,11 +287,11 @@ def test_run_market_backfill_dedupes_explicit_symbols_with_benchmarks(monkeypatc
         symbols=["spy", "AAPL", "SPY"],
         mode="full",
         end_date=date(2026, 4, 23),
-        settings=Settings(BENCHMARK_MARKET_SYMBOLS="SPY,QQQ"),
+        settings=Settings(SUPPORT_MARKET_SYMBOLS="SPY,QQQ"),
     )
 
-    assert calls["symbols"] == ["SPY", "AAPL", "QQQ"]
-    assert result["symbol_count"] == 3
+    assert calls["symbols"] == ["SPY", "AAPL"]
+    assert result["symbol_count"] == 2
 
 
 def test_refresh_monthly_universe_snapshots_replaces_active_members_with_latest_snapshot(monkeypatch) -> None:

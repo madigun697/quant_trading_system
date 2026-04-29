@@ -161,7 +161,7 @@ POSTGRES_HOST=127.0.0.1 POSTGRES_PORT=55432 MINIO_ENDPOINT=http://127.0.0.1:9000
 POSTGRES_HOST=127.0.0.1 POSTGRES_PORT=55432 MINIO_ENDPOINT=http://127.0.0.1:9000 uv run python -m quant_data_platform.cli daily-incremental
 ```
 
-- `BENCHMARK_MARKET_SYMBOLS` 기본값은 `SPY`이며, 일반 공통주 유니버스와 별개로 시장 데이터 적재 대상에 항상 병합됩니다.
+- `SUPPORT_MARKET_SYMBOLS` 기본값은 `SPY,VT,IEF,SGOV,JPST`이며, 일반 공통주 유니버스와 별개로 시장 데이터 적재 대상에 항상 병합됩니다.
 - `stg_benchmark_series`의 `SPY`는 `stg_daily_prices`의 최신 종목별 가격 스냅샷 전체를 사용하므로, 부분 recent 갱신 후에도 과거 이력이 유지됩니다.
 
 주의:

@@ -34,31 +34,57 @@ function joinOrFallback(items) {
 
 function setupSelectionSummary(form) {
   const presetScript = form.querySelector("[data-preset-options-json]");
+  const overlayScript = form.querySelector("[data-overlay-options-json]");
+  const safeAssetScript = form.querySelector("[data-safe-asset-options-json]");
   const costScript = form.querySelector("[data-cost-options-json]");
   const presets = readJsonScript(presetScript) || [];
+  const overlays = readJsonScript(overlayScript) || [];
+  const safeAssets = readJsonScript(safeAssetScript) || [];
   const costs = readJsonScript(costScript) || [];
   const presetById = new Map(presets.map((option) => [option.id, option]));
+  const overlayById = new Map(overlays.map((option) => [option.id, option]));
+  const safeAssetById = new Map(safeAssets.map((option) => [option.id, option]));
   const costById = new Map(costs.map((option) => [option.id, option]));
 
   const presetSelect = form.querySelector("[data-preset-select]");
+  const overlaySelect = form.querySelector("[data-overlay-select]");
+  const safeAssetSelect = form.querySelector("[data-safe-asset-select]");
   const costSelect = form.querySelector("[data-cost-select]");
   const presetHelp = form.querySelector("[data-preset-help]");
+  const overlayHelp = form.querySelector("[data-overlay-help]");
+  const safeAssetHelp = form.querySelector("[data-safe-asset-help]");
   const costHelp = form.querySelector("[data-cost-help]");
   const rationale = form.querySelector("[data-selection-rationale]");
   const description = form.querySelector("[data-selection-description]");
+  const overlayDescription = form.querySelector("[data-selection-overlay-description]");
   const execution = form.querySelector("[data-selection-execution]");
+  const overlayExecution = form.querySelector("[data-selection-overlay-execution]");
+  const safeAssetSummary = form.querySelector("[data-selection-safe-asset]");
   const costSummary = form.querySelector("[data-selection-cost]");
   const rationaleDetail = form.querySelector("[data-selection-rationale-detail]");
+  const overlayRationale = form.querySelector("[data-selection-overlay-rationale]");
   const higher = form.querySelector("[data-selection-higher]");
   const lower = form.querySelector("[data-selection-lower]");
   const lookback = form.querySelector("[data-selection-lookback]");
   const risk = form.querySelector("[data-selection-risk]");
+  const overlayAssets = form.querySelector("[data-selection-overlay-assets]");
+  const overlayLookback = form.querySelector("[data-selection-overlay-lookback]");
+  const overlayRisk = form.querySelector("[data-selection-overlay-risk]");
+  const safeAssetDetail = form.querySelector("[data-selection-safe-asset-detail]");
 
   const sync = () => {
     const preset = presetById.get(presetSelect?.value || "");
+    const overlay = overlayById.get(overlaySelect?.value || "");
+    const safeAsset = safeAssetById.get(safeAssetSelect?.value || "");
     const cost = costById.get(costSelect?.value || "");
     if (presetHelp instanceof HTMLElement) {
       presetHelp.textContent = preset ? `${preset.description} · ${preset.lookback_label}` : "";
+    }
+    if (overlayHelp instanceof HTMLElement) {
+      overlayHelp.textContent = overlay ? `${overlay.description} · ${overlay.lookback_label}` : "";
+    }
+    if (safeAssetHelp instanceof HTMLElement) {
+      safeAssetHelp.textContent = safeAsset ? `${safeAsset.description} · ${safeAsset.details}` : "";
     }
     if (costHelp instanceof HTMLElement) {
       costHelp.textContent = cost ? `${cost.description} · ${cost.details}` : "";
@@ -69,14 +95,26 @@ function setupSelectionSummary(form) {
     if (description instanceof HTMLElement) {
       description.textContent = preset?.description || "";
     }
+    if (overlayDescription instanceof HTMLElement) {
+      overlayDescription.textContent = overlay?.description || "";
+    }
     if (execution instanceof HTMLElement) {
       execution.textContent = Array.isArray(preset?.execution_notes) ? preset.execution_notes.join(" / ") : "";
+    }
+    if (overlayExecution instanceof HTMLElement) {
+      overlayExecution.textContent = Array.isArray(overlay?.execution_notes) ? overlay.execution_notes.join(" / ") : "";
+    }
+    if (safeAssetSummary instanceof HTMLElement) {
+      safeAssetSummary.textContent = safeAsset ? `${safeAsset.description} · ${safeAsset.details}` : "";
     }
     if (costSummary instanceof HTMLElement) {
       costSummary.textContent = cost ? `${cost.description} · ${cost.details}` : "";
     }
     if (rationaleDetail instanceof HTMLElement) {
       rationaleDetail.textContent = preset?.rationale || "";
+    }
+    if (overlayRationale instanceof HTMLElement) {
+      overlayRationale.textContent = overlay?.rationale || "";
     }
     if (higher instanceof HTMLElement) {
       higher.textContent = joinOrFallback(preset?.higher_is_better);
@@ -90,9 +128,23 @@ function setupSelectionSummary(form) {
     if (risk instanceof HTMLElement) {
       risk.textContent = Array.isArray(preset?.risk_notes) && preset.risk_notes.length ? preset.risk_notes.join(" / ") : "해당 없음";
     }
+    if (overlayAssets instanceof HTMLElement) {
+      overlayAssets.textContent = overlay ? `${overlay.signal_asset}${overlay.comparison_asset ? ` vs ${overlay.comparison_asset}` : ""}` : "";
+    }
+    if (overlayLookback instanceof HTMLElement) {
+      overlayLookback.textContent = overlay?.lookback_label || "";
+    }
+    if (overlayRisk instanceof HTMLElement) {
+      overlayRisk.textContent = Array.isArray(overlay?.risk_notes) && overlay.risk_notes.length ? overlay.risk_notes.join(" / ") : "해당 없음";
+    }
+    if (safeAssetDetail instanceof HTMLElement) {
+      safeAssetDetail.textContent = safeAsset ? `${safeAsset.label} · ${safeAsset.details}` : "";
+    }
   };
 
   presetSelect?.addEventListener("change", sync);
+  overlaySelect?.addEventListener("change", sync);
+  safeAssetSelect?.addEventListener("change", sync);
   costSelect?.addEventListener("change", sync);
   sync();
 }

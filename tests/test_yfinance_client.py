@@ -59,3 +59,36 @@ def test_parse_history_payload_extracts_prices_and_actions() -> None:
     assert price_rows[0]["source"] == "yfinance_history"
     assert price_rows[1]["adjusted_close"] is not None
     assert {row["action_type"] for row in action_rows} == {"dividend", "split"}
+
+
+def test_parse_history_payload_skips_all_null_pre_inception_rows() -> None:
+    payload = [
+        {
+            "Date": date(1993, 1, 29),
+            "Open": None,
+            "High": None,
+            "Low": None,
+            "Close": None,
+            "Adj Close": None,
+            "Volume": None,
+            "Dividends": None,
+            "Stock Splits": None,
+        },
+        {
+            "Date": date(2020, 6, 1),
+            "Open": 100.0,
+            "High": 100.1,
+            "Low": 99.9,
+            "Close": 100.0,
+            "Adj Close": 100.0,
+            "Volume": 1000,
+            "Dividends": 0.0,
+            "Stock Splits": 0.0,
+        },
+    ]
+
+    price_rows, action_rows = parse_history_payload(payload, symbol="SGOV")
+
+    assert len(price_rows) == 1
+    assert price_rows[0]["trade_date"] == date(2020, 6, 1)
+    assert action_rows == []

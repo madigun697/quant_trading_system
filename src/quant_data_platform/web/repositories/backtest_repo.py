@@ -6,6 +6,7 @@ from decimal import Decimal
 from typing import Any
 
 import psycopg
+from quant_data_platform.config import get_settings
 from quant_data_platform.storage import postgres_connection
 from quant_data_platform.web.presets import STRATEGY_PRESETS, StrategyPreset, StrategyPresetId, get_strategy_preset
 
@@ -147,6 +148,19 @@ class BacktestRepository:
     def relation_probe_query(self, relation_name: str) -> str:
         return f"select 1 from {relation_name} limit 1"
 
+    def required_support_symbols(self) -> tuple[str, ...]:
+        return get_settings().support_market_symbols
+
+    def support_symbol_probe_query(self) -> str:
+        return """
+            select symbol
+            from stg.stg_daily_prices
+            where symbol = any(%(symbols)s::text[])
+              and coalesce(adjusted_close, close) is not null
+            group by symbol
+            order by symbol
+        """
+
     def classify_error(self, exc: Exception, preset_id: StrategyPresetId | None = None) -> ReadinessStatus:
         detail = self._compact_error_detail(exc)
         if isinstance(exc, psycopg.OperationalError):
@@ -189,6 +203,17 @@ class BacktestRepository:
                             detail=f"{relation_name} 확인 실패: {self._compact_error_detail(exc)}",
                             checked_relations=required_relations,
                         )
+                support_symbols = self.required_support_symbols()
+                cur.execute(self.support_symbol_probe_query(), {"symbols": list(support_symbols)})
+                available_symbols = {row["symbol"] for row in cur.fetchall()}
+                missing_symbols = [symbol for symbol in support_symbols if symbol not in available_symbols]
+                if missing_symbols:
+                    return ReadinessStatus(
+                        ok=False,
+                        code="missing_support_symbol_data",
+                        detail=f"지원 심볼 가격 이력이 없습니다: {', '.join(missing_symbols)}",
+                        checked_relations=required_relations,
+                    )
         except psycopg.Error as exc:
             return self.classify_error(exc, preset_id)
         return ReadinessStatus(

@@ -20,6 +20,8 @@ class FakeService:
             state=PageState.EMPTY,
             form_values={
                 "strategy_preset": "value_quality",
+                "market_timing_overlay": "none",
+                "safe_asset_symbol": "SGOV",
                 "start_date": "2024-01-01",
                 "end_date": "2024-12-31",
                 "initial_capital": "100000",
@@ -27,6 +29,14 @@ class FakeService:
                 "transaction_cost_preset": "conservative",
             },
             preset_options=[{"id": "value_quality", "label": "Value + Quality", "description": "desc", "lookback_label": "lb", "rationale": "rationale", "higher_is_better": [], "lower_is_better": [], "execution_notes": [], "risk_notes": []}],
+            overlay_options=[
+                {"id": "none", "label": "None", "description": "desc", "lookback_label": "lb", "rationale": "overlay rationale", "signal_asset": "SPY", "comparison_asset": None, "execution_notes": [], "risk_notes": []},
+                {"id": "emergency_brake_asymmetric", "label": "Emergency", "description": "desc", "lookback_label": "lb", "rationale": "overlay rationale", "signal_asset": "SPY", "comparison_asset": None, "execution_notes": [], "risk_notes": []},
+            ],
+            safe_asset_options=[
+                {"id": "SGOV", "label": "SGOV", "description": "safe", "details": "detail"},
+                {"id": "JPST", "label": "JPST", "description": "safe", "details": "detail"},
+            ],
             transaction_cost_options=[{"id": "conservative", "label": "Conservative", "description": "왕복 총비용 50bp", "round_trip_bps": 50, "details": "detail"}],
         )
 
@@ -48,6 +58,8 @@ class FakeService:
         context.state = self.desired_state
         context.form_values = {
             "strategy_preset": form.strategy_preset.value,
+            "market_timing_overlay": form.market_timing_overlay.value,
+            "safe_asset_symbol": form.safe_asset_symbol.value,
             "start_date": form.start_date.isoformat(),
             "end_date": form.end_date.isoformat(),
             "initial_capital": str(form.initial_capital),
@@ -94,6 +106,8 @@ def test_post_valid_form_returns_success(preset_id: str) -> None:
         "/backtest",
         data={
             "strategy_preset": preset_id,
+            "market_timing_overlay": "none",
+            "safe_asset_symbol": "SGOV",
             "start_date": "2024-01-01",
             "end_date": "2024-12-31",
             "initial_capital": "100000",
@@ -112,6 +126,8 @@ def test_post_invalid_form_returns_error_state() -> None:
         "/backtest",
         data={
             "strategy_preset": "value_quality",
+            "market_timing_overlay": "none",
+            "safe_asset_symbol": "SGOV",
             "start_date": "2024-12-31",
             "end_date": "2024-01-01",
             "initial_capital": "100000",
@@ -145,6 +161,8 @@ def test_post_insufficient_history_returns_state_message() -> None:
         "/backtest",
         data={
             "strategy_preset": "value_quality",
+            "market_timing_overlay": "none",
+            "safe_asset_symbol": "SGOV",
             "start_date": "2024-01-01",
             "end_date": "2024-12-31",
             "initial_capital": "100000",
@@ -163,6 +181,8 @@ def test_post_no_data_returns_state_message() -> None:
         "/backtest",
         data={
             "strategy_preset": "value_quality",
+            "market_timing_overlay": "none",
+            "safe_asset_symbol": "SGOV",
             "start_date": "2024-01-01",
             "end_date": "2024-12-31",
             "initial_capital": "100000",
@@ -181,6 +201,8 @@ def test_form_values_persist_after_post() -> None:
         "/backtest",
         data={
             "strategy_preset": "value_quality",
+            "market_timing_overlay": "emergency_brake_asymmetric",
+            "safe_asset_symbol": "JPST",
             "start_date": "2024-02-01",
             "end_date": "2024-12-31",
             "initial_capital": "250000",
@@ -191,6 +213,7 @@ def test_form_values_persist_after_post() -> None:
     assert response.status_code == 200
     assert 'value="2024-02-01"' in response.text
     assert 'value="250000"' in response.text
+    assert '<option value="JPST" selected>' in response.text
 
 
 def test_post_runtime_error_uses_context_status_code() -> None:
@@ -200,6 +223,8 @@ def test_post_runtime_error_uses_context_status_code() -> None:
         "/backtest",
         data={
             "strategy_preset": "value_quality",
+            "market_timing_overlay": "none",
+            "safe_asset_symbol": "SGOV",
             "start_date": "2024-01-01",
             "end_date": "2024-12-31",
             "initial_capital": "100000",

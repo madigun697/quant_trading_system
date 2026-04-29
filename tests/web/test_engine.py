@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 
-from quant_data_platform.web.presets import StrategyPresetId, TransactionCostPreset, get_strategy_preset
+from quant_data_platform.web.presets import MarketTimingOverlayId, SafeAssetSymbol, StrategyPresetId, TransactionCostPreset, get_strategy_preset
 from quant_data_platform.web.repositories.backtest_repo import BenchmarkValueRow, DailyCloseRow, ExecutionPriceRow, FactorSnapshotRow
 from quant_data_platform.web.schemas import BacktestFormInput, PageState
 from quant_data_platform.web.services.engine import (
@@ -17,6 +17,8 @@ from quant_data_platform.web.services.engine import (
 def make_form(**overrides) -> BacktestFormInput:
     payload = {
         "strategy_preset": StrategyPresetId.VALUE_QUALITY,
+        "market_timing_overlay": MarketTimingOverlayId.NONE,
+        "safe_asset_symbol": SafeAssetSymbol.SGOV,
         "start_date": date(2024, 1, 1),
         "end_date": date(2024, 3, 1),
         "initial_capital": Decimal("1000"),
@@ -291,3 +293,261 @@ def test_simulate_backtest_warns_when_benchmark_anchor_is_missing() -> None:
     assert result.state == PageState.SUCCESS
     assert all(point.benchmark_equity is None for point in result.equity_curve)
     assert any(warning.title == "SPY 비교선 제외" for warning in result.warnings)
+
+
+def test_simulate_backtest_daily_emergency_brake_moves_to_selected_safe_asset() -> None:
+    preset = get_strategy_preset(StrategyPresetId.VALUE_QUALITY)
+    form = make_form(
+        market_timing_overlay=MarketTimingOverlayId.EMERGENCY_BRAKE_ASYMMETRIC,
+        safe_asset_symbol=SafeAssetSymbol.SGOV,
+        start_date=date(2024, 1, 31),
+        end_date=date(2024, 2, 5),
+    )
+    calendar = [date(2024, 1, 31), date(2024, 2, 1), date(2024, 2, 2), date(2024, 2, 5)]
+    strong = {factor.column: Decimal("2") for factor in preset.factor_specs}
+    factor_rows = [FactorSnapshotRow("AAA", date(2024, 1, 31), 1, strong)]
+    execution_rows = [
+        ExecutionPriceRow("AAA", date(2024, 2, 1), Decimal("10")),
+        ExecutionPriceRow("AAA", date(2024, 2, 5), Decimal("10")),
+        ExecutionPriceRow("SGOV", date(2024, 2, 5), Decimal("100")),
+        ExecutionPriceRow("SPY", date(2024, 2, 1), Decimal("100")),
+        ExecutionPriceRow("SPY", date(2024, 2, 5), Decimal("95")),
+    ]
+    daily_rows = [
+        DailyCloseRow("AAA", date(2024, 2, 1), Decimal("10")),
+        DailyCloseRow("AAA", date(2024, 2, 2), Decimal("10")),
+        DailyCloseRow("AAA", date(2024, 2, 5), Decimal("10")),
+        DailyCloseRow("SGOV", date(2024, 2, 5), Decimal("100")),
+    ]
+    for offset in range(90):
+        trade_date = date(2023, 11, 15) + timedelta(days=offset)
+        if trade_date.weekday() < 5:
+            daily_rows.append(DailyCloseRow("SPY", trade_date, Decimal("100")))
+    daily_rows.extend(
+        [
+            DailyCloseRow("SPY", date(2024, 1, 31), Decimal("110")),
+            DailyCloseRow("SPY", date(2024, 2, 1), Decimal("101")),
+            DailyCloseRow("SPY", date(2024, 2, 2), Decimal("90")),
+            DailyCloseRow("SPY", date(2024, 2, 5), Decimal("89")),
+        ]
+    )
+    result = simulate_backtest(
+        input_data=form,
+        calendar_dates=calendar,
+        factor_rows=factor_rows,
+        execution_price_rows=execution_rows,
+        daily_close_rows=daily_rows,
+        benchmark_rows=[
+            BenchmarkValueRow(date(2024, 2, 1), Decimal("100")),
+            BenchmarkValueRow(date(2024, 2, 2), Decimal("90")),
+            BenchmarkValueRow(date(2024, 2, 5), Decimal("89")),
+        ],
+        earliest_available_trade_date=date(2024, 1, 31),
+        transaction_cost_rate=Decimal("0.005"),
+    )
+    assert result.state == PageState.SUCCESS
+    assert any(row.notes == "daily risk_off: factor basket -> SGOV" for row in result.summary_rows)
+    assert [row.symbol for row in result.fill_rows if row.execution_date == date(2024, 2, 5) and row.action == "BUY"] == ["SGOV"]
+
+
+def test_simulate_backtest_waits_until_month_end_before_reentering_factor_basket() -> None:
+    preset = get_strategy_preset(StrategyPresetId.VALUE_QUALITY)
+    form = make_form(
+        market_timing_overlay=MarketTimingOverlayId.EMERGENCY_BRAKE_ASYMMETRIC,
+        safe_asset_symbol=SafeAssetSymbol.SGOV,
+        start_date=date(2024, 1, 31),
+        end_date=date(2024, 3, 1),
+    )
+    calendar = [date(2024, 1, 31), date(2024, 2, 1), date(2024, 2, 2), date(2024, 2, 5), date(2024, 2, 29), date(2024, 3, 1)]
+    strong = {factor.column: Decimal("2") for factor in preset.factor_specs}
+    stronger = {factor.column: Decimal("3") for factor in preset.factor_specs}
+    factor_rows = [
+        FactorSnapshotRow("AAA", date(2024, 1, 31), 1, strong),
+        FactorSnapshotRow("BBB", date(2024, 2, 29), 1, stronger),
+    ]
+    execution_rows = [
+        ExecutionPriceRow("AAA", date(2024, 2, 1), Decimal("10")),
+        ExecutionPriceRow("AAA", date(2024, 2, 5), Decimal("10")),
+        ExecutionPriceRow("BBB", date(2024, 3, 1), Decimal("20")),
+        ExecutionPriceRow("SGOV", date(2024, 2, 5), Decimal("100")),
+        ExecutionPriceRow("SGOV", date(2024, 3, 1), Decimal("100")),
+        ExecutionPriceRow("SPY", date(2024, 2, 1), Decimal("100")),
+        ExecutionPriceRow("SPY", date(2024, 2, 5), Decimal("95")),
+        ExecutionPriceRow("SPY", date(2024, 3, 1), Decimal("110")),
+    ]
+    daily_rows = [
+        DailyCloseRow("AAA", date(2024, 2, 1), Decimal("10")),
+        DailyCloseRow("AAA", date(2024, 2, 2), Decimal("10")),
+        DailyCloseRow("AAA", date(2024, 2, 5), Decimal("10")),
+        DailyCloseRow("SGOV", date(2024, 2, 5), Decimal("100")),
+        DailyCloseRow("SGOV", date(2024, 2, 29), Decimal("100.3")),
+        DailyCloseRow("SGOV", date(2024, 3, 1), Decimal("100.4")),
+    ]
+    for offset in range(320):
+        trade_date = date(2023, 1, 2) + timedelta(days=offset)
+        if trade_date.weekday() < 5:
+            daily_rows.append(DailyCloseRow("SPY", trade_date, Decimal("100")))
+    daily_rows.extend(
+        [
+            DailyCloseRow("SPY", date(2024, 1, 31), Decimal("110")),
+            DailyCloseRow("SPY", date(2024, 2, 1), Decimal("101")),
+            DailyCloseRow("SPY", date(2024, 2, 2), Decimal("90")),
+            DailyCloseRow("SPY", date(2024, 2, 5), Decimal("89")),
+            DailyCloseRow("SPY", date(2024, 2, 29), Decimal("110")),
+            DailyCloseRow("SPY", date(2024, 3, 1), Decimal("111")),
+        ]
+    )
+    result = simulate_backtest(
+        input_data=form,
+        calendar_dates=calendar,
+        factor_rows=factor_rows,
+        execution_price_rows=execution_rows,
+        daily_close_rows=daily_rows,
+        benchmark_rows=[
+            BenchmarkValueRow(date(2024, 2, 1), Decimal("100")),
+            BenchmarkValueRow(date(2024, 2, 2), Decimal("90")),
+            BenchmarkValueRow(date(2024, 2, 5), Decimal("89")),
+            BenchmarkValueRow(date(2024, 2, 29), Decimal("110")),
+            BenchmarkValueRow(date(2024, 3, 1), Decimal("111")),
+        ],
+        earliest_available_trade_date=date(2024, 1, 31),
+        transaction_cost_rate=Decimal("0.005"),
+    )
+    assert result.state == PageState.SUCCESS
+    assert any(row.notes == "daily risk_off: factor basket -> SGOV" for row in result.summary_rows)
+    assert any(row.notes == "month-end risk_on: SGOV -> factor basket" for row in result.summary_rows)
+    march_buys = [row.symbol for row in result.fill_rows if row.execution_date == date(2024, 3, 1) and row.action == "BUY"]
+    assert march_buys == ["BBB"]
+
+
+def test_simulate_backtest_canary_signal_uses_ief_but_parks_in_jpst() -> None:
+    preset = get_strategy_preset(StrategyPresetId.VALUE_QUALITY)
+    form = make_form(
+        market_timing_overlay=MarketTimingOverlayId.CANARY_ASSET_SIGNAL,
+        safe_asset_symbol=SafeAssetSymbol.JPST,
+        start_date=date(2024, 1, 31),
+        end_date=date(2024, 2, 5),
+    )
+    calendar = [date(2024, 1, 31), date(2024, 2, 1), date(2024, 2, 2), date(2024, 2, 5)]
+    strong = {factor.column: Decimal("2") for factor in preset.factor_specs}
+    factor_rows = [FactorSnapshotRow("AAA", date(2024, 1, 31), 1, strong)]
+    execution_rows = [
+        ExecutionPriceRow("AAA", date(2024, 2, 1), Decimal("10")),
+        ExecutionPriceRow("AAA", date(2024, 2, 5), Decimal("10")),
+        ExecutionPriceRow("JPST", date(2024, 2, 5), Decimal("50")),
+        ExecutionPriceRow("SPY", date(2024, 2, 1), Decimal("100")),
+        ExecutionPriceRow("SPY", date(2024, 2, 5), Decimal("99")),
+    ]
+    daily_rows = [
+        DailyCloseRow("AAA", date(2024, 2, 1), Decimal("10")),
+        DailyCloseRow("AAA", date(2024, 2, 2), Decimal("10")),
+        DailyCloseRow("AAA", date(2024, 2, 5), Decimal("10")),
+        DailyCloseRow("JPST", date(2024, 2, 5), Decimal("50")),
+    ]
+    for offset in range(140):
+        trade_date = date(2023, 8, 1) + timedelta(days=offset)
+        if trade_date.weekday() < 5:
+            daily_rows.append(DailyCloseRow("VT", trade_date, Decimal("110")))
+            daily_rows.append(DailyCloseRow("IEF", trade_date, Decimal("100")))
+    daily_rows.extend(
+        [
+            DailyCloseRow("VT", date(2024, 1, 31), Decimal("120")),
+            DailyCloseRow("VT", date(2024, 2, 1), Decimal("119")),
+            DailyCloseRow("VT", date(2024, 2, 2), Decimal("88")),
+            DailyCloseRow("VT", date(2024, 2, 5), Decimal("87")),
+            DailyCloseRow("IEF", date(2024, 1, 31), Decimal("101")),
+            DailyCloseRow("IEF", date(2024, 2, 1), Decimal("101.2")),
+            DailyCloseRow("IEF", date(2024, 2, 2), Decimal("106")),
+            DailyCloseRow("IEF", date(2024, 2, 5), Decimal("106.5")),
+            DailyCloseRow("SPY", date(2024, 1, 31), Decimal("100")),
+            DailyCloseRow("SPY", date(2024, 2, 1), Decimal("99")),
+            DailyCloseRow("SPY", date(2024, 2, 2), Decimal("98")),
+            DailyCloseRow("SPY", date(2024, 2, 5), Decimal("97")),
+        ]
+    )
+    result = simulate_backtest(
+        input_data=form,
+        calendar_dates=calendar,
+        factor_rows=factor_rows,
+        execution_price_rows=execution_rows,
+        daily_close_rows=daily_rows,
+        benchmark_rows=[
+            BenchmarkValueRow(date(2024, 2, 1), Decimal("99")),
+            BenchmarkValueRow(date(2024, 2, 2), Decimal("98")),
+            BenchmarkValueRow(date(2024, 2, 5), Decimal("97")),
+        ],
+        earliest_available_trade_date=date(2024, 1, 31),
+        transaction_cost_rate=Decimal("0.005"),
+    )
+    assert result.state == PageState.SUCCESS
+    assert any(row.notes == "daily risk_off: factor basket -> JPST" for row in result.summary_rows)
+    assert [row.symbol for row in result.fill_rows if row.execution_date == date(2024, 2, 5) and row.action == "BUY"] == ["JPST"]
+
+
+def test_simulate_backtest_keeps_factor_state_when_safe_asset_open_is_missing() -> None:
+    preset = get_strategy_preset(StrategyPresetId.VALUE_QUALITY)
+    form = make_form(
+        market_timing_overlay=MarketTimingOverlayId.EMERGENCY_BRAKE_ASYMMETRIC,
+        safe_asset_symbol=SafeAssetSymbol.SGOV,
+        start_date=date(2024, 1, 31),
+        end_date=date(2024, 3, 1),
+    )
+    calendar = [date(2024, 1, 31), date(2024, 2, 1), date(2024, 2, 2), date(2024, 2, 5), date(2024, 2, 29), date(2024, 3, 1)]
+    strong = {factor.column: Decimal("2") for factor in preset.factor_specs}
+    stronger = {factor.column: Decimal("3") for factor in preset.factor_specs}
+    factor_rows = [
+        FactorSnapshotRow("AAA", date(2024, 1, 31), 1, strong),
+        FactorSnapshotRow("BBB", date(2024, 2, 29), 1, stronger),
+    ]
+    execution_rows = [
+        ExecutionPriceRow("AAA", date(2024, 2, 1), Decimal("10")),
+        ExecutionPriceRow("AAA", date(2024, 2, 5), Decimal("10")),
+        ExecutionPriceRow("AAA", date(2024, 2, 29), Decimal("10")),
+        ExecutionPriceRow("AAA", date(2024, 3, 1), Decimal("10")),
+        ExecutionPriceRow("BBB", date(2024, 3, 1), Decimal("20")),
+        ExecutionPriceRow("SPY", date(2024, 2, 1), Decimal("100")),
+        ExecutionPriceRow("SPY", date(2024, 2, 5), Decimal("95")),
+        ExecutionPriceRow("SPY", date(2024, 3, 1), Decimal("110")),
+    ]
+    daily_rows = [
+        DailyCloseRow("AAA", date(2024, 2, 1), Decimal("10")),
+        DailyCloseRow("AAA", date(2024, 2, 2), Decimal("10")),
+        DailyCloseRow("AAA", date(2024, 2, 5), Decimal("10")),
+        DailyCloseRow("AAA", date(2024, 2, 29), Decimal("10")),
+        DailyCloseRow("AAA", date(2024, 3, 1), Decimal("10")),
+        DailyCloseRow("BBB", date(2024, 3, 1), Decimal("20")),
+    ]
+    for offset in range(320):
+        trade_date = date(2023, 1, 2) + timedelta(days=offset)
+        if trade_date.weekday() < 5:
+            daily_rows.append(DailyCloseRow("SPY", trade_date, Decimal("100")))
+    daily_rows.extend(
+        [
+            DailyCloseRow("SPY", date(2024, 1, 31), Decimal("110")),
+            DailyCloseRow("SPY", date(2024, 2, 1), Decimal("101")),
+            DailyCloseRow("SPY", date(2024, 2, 2), Decimal("90")),
+            DailyCloseRow("SPY", date(2024, 2, 5), Decimal("89")),
+            DailyCloseRow("SPY", date(2024, 2, 29), Decimal("110")),
+            DailyCloseRow("SPY", date(2024, 3, 1), Decimal("111")),
+        ]
+    )
+    result = simulate_backtest(
+        input_data=form,
+        calendar_dates=calendar,
+        factor_rows=factor_rows,
+        execution_price_rows=execution_rows,
+        daily_close_rows=daily_rows,
+        benchmark_rows=[
+            BenchmarkValueRow(date(2024, 2, 1), Decimal("100")),
+            BenchmarkValueRow(date(2024, 2, 2), Decimal("90")),
+            BenchmarkValueRow(date(2024, 2, 5), Decimal("89")),
+            BenchmarkValueRow(date(2024, 2, 29), Decimal("110")),
+            BenchmarkValueRow(date(2024, 3, 1), Decimal("111")),
+        ],
+        earliest_available_trade_date=date(2024, 1, 31),
+        transaction_cost_rate=Decimal("0.005"),
+    )
+    assert result.state == PageState.SUCCESS
+    assert any(flag == "SGOV 시가가 없어 기존 자산을 유지했습니다." for flag in result.data_quality_flags)
+    assert any(row.notes == "month-end risk_on: factor rebalance" for row in result.summary_rows)
+    assert [row.symbol for row in result.fill_rows if row.execution_date == date(2024, 3, 1) and row.action == "BUY"] == ["BBB"]

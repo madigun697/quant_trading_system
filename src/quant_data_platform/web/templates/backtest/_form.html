@@ -1,10 +1,12 @@
 <form method="post" action="/backtest" class="panel-card control-form" data-backtest-form>
   <div class="panel-header">
     <h2>입력 설정</h2>
-    <p>설정은 적게, 해석은 쉽게. 첫 버전은 프리셋만 지원합니다.</p>
+    <p>팩터 전략에 마켓타이밍 오버레이를 겹쳐서 방어 구간까지 함께 점검합니다.</p>
   </div>
 
   <script type="application/json" data-preset-options-json>{{ preset_options | tojson }}</script>
+  <script type="application/json" data-overlay-options-json>{{ overlay_options | tojson }}</script>
+  <script type="application/json" data-safe-asset-options-json>{{ safe_asset_options | tojson }}</script>
   <script type="application/json" data-cost-options-json>{{ transaction_cost_options | tojson }}</script>
 
   {% if field_errors.get('__root__') %}
@@ -25,6 +27,39 @@
       {% if selected_preset_detail %} · {{ selected_preset_detail.lookback_label }}{% endif %}
     </small>
     {% if field_errors.get('strategy_preset') %}<small class="field-error">{{ field_errors['strategy_preset'] }}</small>{% endif %}
+  </label>
+
+  <label class="field">
+    <span>마켓타이밍 오버레이</span>
+    <select name="market_timing_overlay" data-overlay-select>
+      {% for overlay in overlay_options %}
+        <option value="{{ overlay.id }}" {% if form_values.market_timing_overlay == overlay.id %}selected{% endif %}>
+          {{ overlay.label }}
+        </option>
+      {% endfor %}
+    </select>
+    <small class="field-help" data-overlay-help aria-live="polite">
+      {{ selected_overlay_detail.description if selected_overlay_detail else '' }}
+      {% if selected_overlay_detail %} · {{ selected_overlay_detail.lookback_label }}{% endif %}
+    </small>
+    {% if field_errors.get('market_timing_overlay') %}<small class="field-error">{{ field_errors['market_timing_overlay'] }}</small>{% endif %}
+  </label>
+
+  <label class="field">
+    <span>안전자산</span>
+    <select name="safe_asset_symbol" data-safe-asset-select>
+      {% for asset in safe_asset_options %}
+        <option value="{{ asset.id }}" {% if form_values.safe_asset_symbol == asset.id %}selected{% endif %}>
+          {{ asset.label }}
+        </option>
+      {% endfor %}
+    </select>
+    <small class="field-help" data-safe-asset-help aria-live="polite">
+      {% if selected_safe_asset_detail %}
+        {{ selected_safe_asset_detail.description }} · {{ selected_safe_asset_detail.details }}
+      {% endif %}
+    </small>
+    {% if field_errors.get('safe_asset_symbol') %}<small class="field-error">{{ field_errors['safe_asset_symbol'] }}</small>{% endif %}
   </label>
 
   <div class="field-row">
@@ -92,10 +127,30 @@
         <p data-selection-description>{{ selected_preset_detail.description if selected_preset_detail else '' }}</p>
       </article>
       <article class="selection-chip">
+        <strong>오버레이 설명</strong>
+        <p data-selection-overlay-description>{{ selected_overlay_detail.description if selected_overlay_detail else '' }}</p>
+      </article>
+      <article class="selection-chip">
         <strong>실행 조건</strong>
         <p data-selection-execution>
           {% if selected_preset_detail %}
             {{ selected_preset_detail.execution_notes | join(' / ') }}
+          {% endif %}
+        </p>
+      </article>
+      <article class="selection-chip">
+        <strong>오버레이 신호</strong>
+        <p data-selection-overlay-execution>
+          {% if selected_overlay_detail %}
+            {{ selected_overlay_detail.execution_notes | join(' / ') }}
+          {% endif %}
+        </p>
+      </article>
+      <article class="selection-chip">
+        <strong>피난 자산</strong>
+        <p data-selection-safe-asset>
+          {% if selected_safe_asset_detail %}
+            {{ selected_safe_asset_detail.description }} · {{ selected_safe_asset_detail.details }}
           {% endif %}
         </p>
       </article>
@@ -112,6 +167,7 @@
       <summary>선정 기준 자세히 보기</summary>
       <div class="selection-details__body">
         <p><strong>핵심 아이디어</strong> <span data-selection-rationale-detail>{{ selected_preset_detail.rationale if selected_preset_detail else '' }}</span></p>
+        <p><strong>오버레이 아이디어</strong> <span data-selection-overlay-rationale>{{ selected_overlay_detail.rationale if selected_overlay_detail else '' }}</span></p>
         <p>
           <strong>높을수록 우선</strong>
           <span data-selection-higher>
@@ -130,6 +186,10 @@
         </p>
         <p><strong>데이터 요구</strong> <span data-selection-lookback>{{ selected_preset_detail.lookback_label if selected_preset_detail else '' }}</span></p>
         <p><strong>주의 메모</strong> <span data-selection-risk>{% if selected_preset_detail %}{{ selected_preset_detail.risk_notes | join(' / ') }}{% endif %}</span></p>
+        <p><strong>오버레이 신호 자산</strong> <span data-selection-overlay-assets>{% if selected_overlay_detail %}{{ selected_overlay_detail.signal_asset }}{% if selected_overlay_detail.comparison_asset %} vs {{ selected_overlay_detail.comparison_asset }}{% endif %}{% endif %}</span></p>
+        <p><strong>오버레이 데이터 요구</strong> <span data-selection-overlay-lookback>{{ selected_overlay_detail.lookback_label if selected_overlay_detail else '' }}</span></p>
+        <p><strong>오버레이 주의 메모</strong> <span data-selection-overlay-risk>{% if selected_overlay_detail %}{{ selected_overlay_detail.risk_notes | join(' / ') }}{% endif %}</span></p>
+        <p><strong>실제 안전자산</strong> <span data-selection-safe-asset-detail>{% if selected_safe_asset_detail %}{{ selected_safe_asset_detail.label }} · {{ selected_safe_asset_detail.details }}{% endif %}</span></p>
       </div>
     </details>
   </section>

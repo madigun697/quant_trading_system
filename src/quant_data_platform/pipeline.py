@@ -259,8 +259,8 @@ def _normalize_symbols(symbols: Iterable[str]) -> list[str]:
     return normalized
 
 
-def _merge_benchmark_market_symbols(symbols: Iterable[str], settings: Settings) -> list[str]:
-    return _normalize_symbols([*symbols, *settings.benchmark_market_symbols])
+def _merge_support_market_symbols(symbols: Iterable[str], settings: Settings) -> list[str]:
+    return _normalize_symbols([*symbols, *settings.support_market_symbols])
 
 
 def _resolve_full_universe_symbols(conn) -> list[str]:
@@ -741,6 +741,7 @@ def run_market_backfill(
     settings = settings or get_settings()
     cohort = cohort or settings.default_cohort
     snapshot_as_of = end_date or date.today()
+    explicit_symbols = symbols is not None
     with postgres_connection(settings) as conn:
         if symbols is None:
             if full_universe:
@@ -757,7 +758,10 @@ def run_market_backfill(
                 )
             else:
                 symbols = fetch_universe_symbols(conn, cohort, snapshot_as_of=snapshot_as_of)
-    symbols = _merge_benchmark_market_symbols(symbols or [], settings)
+    if explicit_symbols:
+        symbols = _normalize_symbols(symbols or [])
+    else:
+        symbols = _merge_support_market_symbols(symbols or [], settings)
     effective_start = start_date
     if mode == "recent" and effective_start is None:
         effective_start = discovery_start_date(snapshot_as_of, settings.liquidity_discovery_days)
@@ -772,7 +776,7 @@ def run_market_backfill(
                     cohort,
                     snapshot_as_of=snapshot_as_of,
                 )
-            ordered_symbols = _merge_benchmark_market_symbols(ordered_symbols, settings)
+            ordered_symbols = _merge_support_market_symbols(ordered_symbols, settings)
             resource_name = f"yfinance_history:{'full_universe' if full_universe else cohort}"
             offset = 0 if reset_cursor else int(get_ingestion_watermark(conn, source_name="yfinance", resource_name=resource_name) or "0")
             chunk_symbols = ordered_symbols[offset : offset + request_budget]

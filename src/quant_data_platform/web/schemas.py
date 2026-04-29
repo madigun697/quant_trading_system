@@ -7,7 +7,13 @@ from typing import Any
 
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
-from quant_data_platform.web.presets import StrategyPresetId, TransactionCostPreset, default_start_date
+from quant_data_platform.web.presets import (
+    MarketTimingOverlayId,
+    SafeAssetSymbol,
+    StrategyPresetId,
+    TransactionCostPreset,
+    default_start_date,
+)
 
 
 class PageState(StrEnum):
@@ -21,6 +27,8 @@ class PageState(StrEnum):
 
 class BacktestFormInput(BaseModel):
     strategy_preset: StrategyPresetId = StrategyPresetId.VALUE_QUALITY
+    market_timing_overlay: MarketTimingOverlayId = MarketTimingOverlayId.NONE
+    safe_asset_symbol: SafeAssetSymbol = SafeAssetSymbol.SGOV
     start_date: date = Field(default_factory=default_start_date)
     end_date: date = Field(default_factory=date.today)
     initial_capital: Decimal = Decimal("100000")
@@ -107,6 +115,25 @@ class PresetDetail(BaseModel):
     risk_notes: list[str] = Field(default_factory=list)
 
 
+class OverlayDetail(BaseModel):
+    id: str
+    label: str
+    description: str
+    lookback_label: str
+    rationale: str
+    signal_asset: str
+    comparison_asset: str | None = None
+    execution_notes: list[str] = Field(default_factory=list)
+    risk_notes: list[str] = Field(default_factory=list)
+
+
+class SafeAssetDetail(BaseModel):
+    id: str
+    label: str
+    description: str
+    details: str
+
+
 class CostDetail(BaseModel):
     id: str
     label: str
@@ -127,8 +154,12 @@ class BacktestPageContext(BaseModel):
     state: PageState
     form_values: dict[str, Any]
     preset_options: list[dict[str, Any]]
+    overlay_options: list[dict[str, Any]]
+    safe_asset_options: list[dict[str, Any]]
     transaction_cost_options: list[dict[str, Any]]
     selected_preset_detail: PresetDetail | None = None
+    selected_overlay_detail: OverlayDetail | None = None
+    selected_safe_asset_detail: SafeAssetDetail | None = None
     selected_cost_detail: CostDetail | None = None
     summary_metrics: list[SummaryMetric] = Field(default_factory=list)
     equity_curve: list[EquityCurvePoint] = Field(default_factory=list)
@@ -142,13 +173,15 @@ class BacktestPageContext(BaseModel):
     benchmark_available: bool = False
     equity_curve_svg: str | None = None
     page_title: str = "프리셋 백테스트"
-    helper_copy: str = "월말 신호를 보고 다음 거래일에 체결하는 초보자용 프리셋 백테스트입니다."
+    helper_copy: str = "팩터 전략에 마켓타이밍 오버레이를 결합해 월말 리밸런스와 일일 risk-off 방어를 함께 점검할 수 있습니다."
     http_status_code: int = 200
 
 
 def form_values_from_model(form: BacktestFormInput) -> dict[str, str]:
     return {
         "strategy_preset": form.strategy_preset.value,
+        "market_timing_overlay": form.market_timing_overlay.value,
+        "safe_asset_symbol": form.safe_asset_symbol.value,
         "start_date": form.start_date.isoformat(),
         "end_date": form.end_date.isoformat(),
         "initial_capital": str(form.initial_capital),
@@ -160,6 +193,8 @@ def form_values_from_model(form: BacktestFormInput) -> dict[str, str]:
 def form_values_from_raw(data: dict[str, Any]) -> dict[str, str]:
     return {
         "strategy_preset": str(data.get("strategy_preset", StrategyPresetId.VALUE_QUALITY.value)),
+        "market_timing_overlay": str(data.get("market_timing_overlay", MarketTimingOverlayId.NONE.value)),
+        "safe_asset_symbol": str(data.get("safe_asset_symbol", SafeAssetSymbol.SGOV.value)),
         "start_date": str(data.get("start_date", default_start_date().isoformat())),
         "end_date": str(data.get("end_date", date.today().isoformat())),
         "initial_capital": str(data.get("initial_capital", "100000")),

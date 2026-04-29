@@ -7,7 +7,13 @@ from decimal import Decimal
 from math import sqrt
 from statistics import mean, pstdev
 
-from quant_data_platform.web.presets import StrategyPreset, get_strategy_preset
+from quant_data_platform.web.presets import (
+    MarketTimingOverlayId,
+    SafeAssetSymbol,
+    StrategyPreset,
+    get_market_timing_overlay,
+    get_strategy_preset,
+)
 from quant_data_platform.web.repositories.backtest_repo import BenchmarkValueRow, DailyCloseRow, ExecutionPriceRow, FactorSnapshotRow
 from quant_data_platform.web.schemas import BacktestFormInput, PageState
 
@@ -97,6 +103,22 @@ class SimulationResult:
     summary_metrics: dict[str, Decimal | float | int]
     unavailable_reasons: list[UnavailableReasonEvent]
     error_message: str | None = None
+
+
+@dataclass(frozen=True)
+class OverlaySignal:
+    risk_on: bool | None
+    facts: list[str]
+
+
+@dataclass(frozen=True)
+class PendingAction:
+    action_type: str
+    signal_date: date
+    execution_date: date
+    target_symbols: tuple[str, ...]
+    note: str
+    resulting_state: str
 
 
 def month_end_signal_dates(calendar_dates: list[date], start_date: date, end_date: date) -> list[date]:
@@ -206,15 +228,183 @@ def _fallback_close_price(
         return close_value
 
     if symbol in last_known_closes:
-        quality_flags.add("일부 종목은 종가가 비어 있어 직전 사용 가능 가격으로 평가했습니다.")
+        quality_flags.add("일부 자산은 종가가 비어 있어 직전 사용 가능 가격으로 평가했습니다.")
         return last_known_closes[symbol]
 
     execution_open = execution_open_map.get((symbol, current_date))
     if execution_open is not None:
-        quality_flags.add("일부 종목은 체결일 종가가 비어 있어 시가로 평가했습니다.")
+        quality_flags.add("일부 자산은 체결일 종가가 비어 있어 시가로 평가했습니다.")
         last_known_closes[symbol] = execution_open
         return execution_open
     return None
+
+
+def _build_unavailable_reason(
+    *,
+    code: str,
+    title: str,
+    detail: str,
+    facts: list[str] | None = None,
+    suggestions: list[str] | None = None,
+) -> UnavailableReasonEvent:
+    return UnavailableReasonEvent(
+        code=code,
+        title=title,
+        detail=detail,
+        facts=facts or [],
+        suggestions=suggestions or [],
+    )
+
+
+def _solve_fee_aware_target_notional(
+    pre_trade_value: Decimal,
+    current_notionals: dict[str, Decimal],
+    target_symbols: list[str],
+    transaction_cost_rate: Decimal,
+) -> Decimal:
+    if not target_symbols:
+        return Decimal("0")
+
+    target_count = Decimal(len(target_symbols))
+    high = pre_trade_value / target_count
+    low = Decimal("0")
+    target_set = set(target_symbols)
+    all_symbols = sorted(set(current_notionals) | target_set)
+
+    def net_after_costs(target_notional: Decimal) -> Decimal:
+        traded_notional = Decimal("0")
+        for symbol in all_symbols:
+            current = current_notionals.get(symbol, Decimal("0"))
+            target = target_notional if symbol in target_set else Decimal("0")
+            traded_notional += abs(target - current)
+        return pre_trade_value - (transaction_cost_rate * traded_notional)
+
+    for _ in range(60):
+        mid = (low + high) / 2
+        target_total = mid * target_count
+        affordable_total = net_after_costs(mid)
+        if target_total > affordable_total:
+            high = mid
+        else:
+            low = mid
+    return low
+
+
+def _build_history_maps(
+    daily_close_rows: list[DailyCloseRow],
+) -> tuple[dict[str, list[tuple[date, Decimal]]], dict[str, dict[date, int]]]:
+    history_map: dict[str, list[tuple[date, Decimal]]] = defaultdict(list)
+    for row in daily_close_rows:
+        if row.adjusted_close is not None:
+            history_map[row.symbol].append((row.trade_date, Decimal(row.adjusted_close)))
+    for symbol in history_map:
+        history_map[symbol].sort(key=lambda item: item[0])
+    index_map = {
+        symbol: {trade_date: idx for idx, (trade_date, _value) in enumerate(rows)}
+        for symbol, rows in history_map.items()
+    }
+    return history_map, index_map
+
+
+def _close_for(symbol: str, current_date: date, history_map: dict[str, list[tuple[date, Decimal]]], index_map: dict[str, dict[date, int]]) -> Decimal | None:
+    idx = index_map.get(symbol, {}).get(current_date)
+    if idx is None:
+        return None
+    return history_map[symbol][idx][1]
+
+
+def _sma_for(
+    symbol: str,
+    current_date: date,
+    window: int,
+    history_map: dict[str, list[tuple[date, Decimal]]],
+    index_map: dict[str, dict[date, int]],
+) -> Decimal | None:
+    idx = index_map.get(symbol, {}).get(current_date)
+    if idx is None or idx + 1 < window:
+        return None
+    values = [price for _trade_date, price in history_map[symbol][idx - window + 1 : idx + 1]]
+    return sum(values, start=Decimal("0")) / Decimal(window)
+
+
+def _return_for(
+    symbol: str,
+    current_date: date,
+    lookback_days: int,
+    history_map: dict[str, list[tuple[date, Decimal]]],
+    index_map: dict[str, dict[date, int]],
+) -> Decimal | None:
+    idx = index_map.get(symbol, {}).get(current_date)
+    if idx is None or idx < lookback_days:
+        return None
+    current_price = history_map[symbol][idx][1]
+    prior_price = history_map[symbol][idx - lookback_days][1]
+    if prior_price <= 0:
+        return None
+    return (current_price / prior_price) - Decimal("1")
+
+
+def _evaluate_month_end_overlay_signal(
+    overlay_id: MarketTimingOverlayId,
+    current_date: date,
+    history_map: dict[str, list[tuple[date, Decimal]]],
+    index_map: dict[str, dict[date, int]],
+) -> OverlaySignal:
+    if overlay_id == MarketTimingOverlayId.NONE:
+        return OverlaySignal(risk_on=True, facts=[])
+
+    if overlay_id == MarketTimingOverlayId.EMERGENCY_BRAKE_ASYMMETRIC:
+        close_value = _close_for("SPY", current_date, history_map, index_map)
+        sma200 = _sma_for("SPY", current_date, 200, history_map, index_map)
+        ret20 = _return_for("SPY", current_date, 20, history_map, index_map)
+        facts: list[str] = []
+        if close_value is None:
+            facts.append("SPY 종가가 없습니다.")
+        if sma200 is None:
+            facts.append("SPY 200일선 계산 이력이 부족합니다.")
+        if ret20 is None:
+            facts.append("SPY 20거래일 수익률 계산 이력이 부족합니다.")
+        if facts:
+            return OverlaySignal(risk_on=None, facts=facts)
+        return OverlaySignal(risk_on=bool(close_value > sma200 and ret20 > 0), facts=[])
+
+    if overlay_id == MarketTimingOverlayId.CANARY_ASSET_SIGNAL:
+        vt_return = _return_for("VT", current_date, 84, history_map, index_map)
+        ief_return = _return_for("IEF", current_date, 84, history_map, index_map)
+        facts = []
+        if vt_return is None:
+            facts.append("VT 84거래일 수익률 계산 이력이 부족합니다.")
+        if ief_return is None:
+            facts.append("IEF 84거래일 수익률 계산 이력이 부족합니다.")
+        if facts:
+            return OverlaySignal(risk_on=None, facts=facts)
+        return OverlaySignal(risk_on=bool(vt_return > ief_return), facts=[])
+
+    return OverlaySignal(risk_on=True, facts=[])
+
+
+def _evaluate_daily_risk_off(
+    overlay_id: MarketTimingOverlayId,
+    current_date: date,
+    history_map: dict[str, list[tuple[date, Decimal]]],
+    index_map: dict[str, dict[date, int]],
+) -> OverlaySignal:
+    if overlay_id in {MarketTimingOverlayId.NONE}:
+        return OverlaySignal(risk_on=True, facts=[])
+
+    if overlay_id == MarketTimingOverlayId.EMERGENCY_BRAKE_ASYMMETRIC:
+        close_value = _close_for("SPY", current_date, history_map, index_map)
+        sma50 = _sma_for("SPY", current_date, 50, history_map, index_map)
+        facts: list[str] = []
+        if close_value is None:
+            facts.append("SPY 종가가 없습니다.")
+        if sma50 is None:
+            facts.append("SPY 50일선 계산 이력이 부족합니다.")
+        if facts:
+            return OverlaySignal(risk_on=None, facts=facts)
+        return OverlaySignal(risk_on=not bool(close_value < sma50), facts=[])
+
+    return _evaluate_month_end_overlay_signal(overlay_id, current_date, history_map, index_map)
 
 
 def _build_warning_events(
@@ -225,6 +415,7 @@ def _build_warning_events(
     missing_execution_open_count: int,
     insufficient_history: bool,
 ) -> list[WarningEvent]:
+    overlay = get_market_timing_overlay(input_data.market_timing_overlay)
     warnings: list[WarningEvent] = [
         WarningEvent(
             title="실전형 결과 기준",
@@ -232,6 +423,14 @@ def _build_warning_events(
             tone="info",
         )
     ]
+    if input_data.market_timing_overlay != MarketTimingOverlayId.NONE:
+        warnings.append(
+            WarningEvent(
+                title="마켓타이밍 오버레이 활성화",
+                body=f"{overlay.label} 오버레이가 켜져 있으며 risk-off 시 {input_data.safe_asset_symbol.value}로 이동합니다.",
+                tone="info",
+            )
+        )
     cost_drag = gross_total_return - net_total_return
     warnings.append(
         WarningEvent(
@@ -264,7 +463,7 @@ def _build_warning_events(
         warnings.append(
             WarningEvent(
                 title="초기 구간은 과거 이력이 부족했습니다",
-                body="선택한 기간 초반에는 전략 계산에 필요한 과거 데이터가 부족해 일부 월이 자동 제외됐습니다.",
+                body="선택한 기간 초반에는 전략 계산에 필요한 가격 또는 신호 데이터가 부족해 일부 월이 자동 제외됐습니다.",
             )
         )
     warnings.append(
@@ -362,57 +561,6 @@ def _calculate_summary_metrics(
     }
 
 
-def _build_unavailable_reason(
-    *,
-    code: str,
-    title: str,
-    detail: str,
-    facts: list[str] | None = None,
-    suggestions: list[str] | None = None,
-) -> UnavailableReasonEvent:
-    return UnavailableReasonEvent(
-        code=code,
-        title=title,
-        detail=detail,
-        facts=facts or [],
-        suggestions=suggestions or [],
-    )
-
-
-def _solve_fee_aware_target_notional(
-    pre_trade_value: Decimal,
-    current_notionals: dict[str, Decimal],
-    target_symbols: list[str],
-    transaction_cost_rate: Decimal,
-) -> Decimal:
-    if not target_symbols:
-        return Decimal("0")
-
-    target_count = Decimal(len(target_symbols))
-    high = pre_trade_value / target_count
-    low = Decimal("0")
-    target_set = set(target_symbols)
-    all_symbols = sorted(set(current_notionals) | target_set)
-
-    def net_after_costs(target_notional: Decimal) -> Decimal:
-        traded_notional = Decimal("0")
-        for symbol in all_symbols:
-            current = current_notionals.get(symbol, Decimal("0"))
-            target = target_notional if symbol in target_set else Decimal("0")
-            traded_notional += abs(target - current)
-        return pre_trade_value - (transaction_cost_rate * traded_notional)
-
-    for _ in range(60):
-        mid = (low + high) / 2
-        target_total = mid * target_count
-        affordable_total = net_after_costs(mid)
-        if target_total > affordable_total:
-            high = mid
-        else:
-            low = mid
-    return low
-
-
 def simulate_backtest(
     input_data: BacktestFormInput,
     calendar_dates: list[date],
@@ -484,6 +632,7 @@ def simulate_backtest(
         for row in benchmark_rows
         if row.value is not None
     }
+    history_map, index_map = _build_history_maps(daily_close_rows)
 
     missing_execution_open_count = 0
     selected_by_signal: dict[date, list[FactorSnapshotRow]] = {}
@@ -535,7 +684,7 @@ def simulate_backtest(
             )
         selected_by_signal[signal_date] = selected_rows
 
-    if not selected_by_signal:
+    if not selected_by_signal and input_data.market_timing_overlay == MarketTimingOverlayId.NONE:
         if insufficient_history:
             facts: list[str] = [f"전략 데이터 시작 시점: {earliest_available_trade_date.isoformat()}"] if earliest_available_trade_date else []
             if blank_factor_month_count:
@@ -562,33 +711,8 @@ def simulate_backtest(
                     suggestions=["기간을 넓히거나 거래비용은 유지한 채 다른 프리셋을 선택해 보세요."],
                 )
             )
-        if missing_execution_open_count:
-            unavailable_reasons.append(
-                _build_unavailable_reason(
-                    code="missing_execution_prices",
-                    title="실행 가격이 비어 있는 종목이 많았습니다",
-                    detail="익영업일 시가가 없는 종목은 실제 체결을 가정할 수 없어 모두 제외했습니다.",
-                    facts=[f"실행가 누락 종목 수: {missing_execution_open_count}"],
-                    suggestions=["같은 전략이라도 다른 기간에서는 실행가가 더 잘 확보될 수 있습니다."],
-                )
-            )
-        state = PageState.INSUFFICIENT_HISTORY if insufficient_history else PageState.NO_DATA
-        message = (
-            "선택한 기간에는 전략 계산에 필요한 과거 이력이 부족합니다."
-            if state == PageState.INSUFFICIENT_HISTORY
-            else "선택한 기간과 조건에서 체결 가능한 후보를 찾지 못했습니다."
-        )
-        if not unavailable_reasons:
-            unavailable_reasons.append(
-                _build_unavailable_reason(
-                    code="generic_no_data",
-                    title="실행 가능한 결과를 만들지 못했습니다",
-                    detail=message,
-                    suggestions=["날짜 범위를 넓히거나 다른 프리셋을 선택해 다시 실행해 보세요."],
-                )
-            )
         return SimulationResult(
-            state=state,
+            state=PageState.INSUFFICIENT_HISTORY if insufficient_history else PageState.NO_DATA,
             equity_curve=[],
             summary_rows=[],
             fill_rows=[],
@@ -596,7 +720,7 @@ def simulate_backtest(
             data_quality_flags=[],
             summary_metrics={},
             unavailable_reasons=unavailable_reasons,
-            error_message=message,
+            error_message="선택한 기간과 조건에서 체결 가능한 후보를 찾지 못했습니다.",
         )
 
     gross_cash = Decimal(input_data.initial_capital)
@@ -610,198 +734,264 @@ def simulate_backtest(
     last_known_closes: dict[str, Decimal] = {}
     total_fees = Decimal("0")
     total_turnover_notional = Decimal("0")
-
-    signal_by_execution = {
-        execution_date: signal_date
-        for signal_date, execution_date in schedule.items()
-        if signal_date in selected_by_signal
-    }
-    first_execution_date = min(signal_by_execution) if signal_by_execution else None
+    portfolio_state = "pre_start"
+    safe_asset = input_data.safe_asset_symbol.value
+    first_execution_date = min(schedule.values()) if schedule else None
     benchmark_shares: Decimal | None = None
     benchmark_last_value: Decimal | None = None
     calendar_in_range = [calendar_date for calendar_date in calendar_dates if input_data.start_date <= calendar_date <= input_data.end_date]
+    next_date_by_date = {
+        current: calendar_in_range[index + 1]
+        for index, current in enumerate(calendar_in_range[:-1])
+    }
+    pending_action: PendingAction | None = None
+    overlay_unavailable_facts: list[str] = []
 
-    for current_date in calendar_in_range:
-        signal_date = signal_by_execution.get(current_date)
-        if signal_date is not None:
-            selected_rows = selected_by_signal[signal_date]
-            selected_symbols = [row.symbol for row in selected_rows]
-            rebalance_sell_notional = Decimal("0")
-            rebalance_buy_notional = Decimal("0")
-            rebalance_fees = Decimal("0")
-            sold_count = 0
+    def execute_target_portfolio(
+        *,
+        current_date: date,
+        signal_date: date,
+        target_symbols: list[str],
+        note: str,
+        resulting_state: str,
+        allow_missing_target_hold: bool = False,
+    ) -> tuple[UnavailableReasonEvent | None, bool]:
+        nonlocal gross_cash, net_cash, total_fees, total_turnover_notional, portfolio_state
+        rebalance_sell_notional = Decimal("0")
+        rebalance_buy_notional = Decimal("0")
+        rebalance_fees = Decimal("0")
+        sold_count = 0
 
-            current_open_prices = {
-                symbol: execution_open_map.get((symbol, current_date))
-                for symbol in sorted(set(gross_positions) | set(net_positions) | set(selected_symbols))
-            }
-            missing_symbols = [symbol for symbol, price in current_open_prices.items() if price is None and symbol in set(gross_positions) | set(net_positions)]
-            if missing_symbols:
-                symbol_list = ", ".join(missing_symbols[:3])
-                reason = _build_unavailable_reason(
+        current_open_prices = {
+            symbol: execution_open_map.get((symbol, current_date))
+            for symbol in sorted(set(gross_positions) | set(net_positions) | set(target_symbols))
+        }
+        missing_symbols = [
+            symbol
+            for symbol, price in current_open_prices.items()
+            if price is None and symbol in set(gross_positions) | set(net_positions)
+        ]
+        if missing_symbols:
+            symbol_list = ", ".join(missing_symbols[:3])
+            return (
+                _build_unavailable_reason(
                     code="missing_rebalance_price",
-                    title="보유 종목의 체결 가격이 비어 있습니다",
+                    title="보유 자산의 체결 가격이 비어 있습니다",
                     detail=f"{current_date.isoformat()} 체결일에 {symbol_list}의 실행 가격이 없어 리밸런스를 계속할 수 없습니다.",
                     facts=[f"누락 종목 수: {len(missing_symbols)}"],
                     suggestions=["해당 기간을 피하거나 데이터 적재 상태를 확인해 주세요."],
-                )
-                return SimulationResult(
-                    state=PageState.ERROR,
-                    equity_curve=[],
-                    summary_rows=[],
-                    fill_rows=[],
-                    warnings=[],
-                    data_quality_flags=[],
-                    summary_metrics={},
-                    unavailable_reasons=[reason],
-                    error_message=reason.detail,
-                )
-
-            gross_current_notionals = {
-                symbol: shares * current_open_prices[symbol]
-                for symbol, shares in gross_positions.items()
-                if current_open_prices[symbol] is not None
-            }
-            net_current_notionals = {
-                symbol: position.shares * current_open_prices[symbol]
-                for symbol, position in net_positions.items()
-                if current_open_prices[symbol] is not None
-            }
-            gross_pre_trade_value = gross_cash + sum(gross_current_notionals.values(), start=Decimal("0"))
-            net_pre_trade_value = net_cash + sum(net_current_notionals.values(), start=Decimal("0"))
-
-            gross_target_notional = gross_pre_trade_value / Decimal(len(selected_symbols)) if selected_symbols else Decimal("0")
-            net_target_notional = _solve_fee_aware_target_notional(
-                net_pre_trade_value,
-                net_current_notionals,
-                selected_symbols,
-                transaction_cost_rate,
+                ),
+                False,
             )
 
-            all_symbols = sorted(set(gross_positions) | set(net_positions) | set(selected_symbols))
-            gross_deltas: dict[str, Decimal] = {}
-            net_deltas: dict[str, Decimal] = {}
-            for symbol in all_symbols:
-                gross_current = gross_current_notionals.get(symbol, Decimal("0"))
-                net_current = net_current_notionals.get(symbol, Decimal("0"))
-                target = gross_target_notional if symbol in selected_symbols else Decimal("0")
-                gross_deltas[symbol] = target - gross_current
-                net_target = net_target_notional if symbol in selected_symbols else Decimal("0")
-                net_deltas[symbol] = net_target - net_current
-
-            for symbol in all_symbols:
-                execution_open = current_open_prices[symbol]
-                if execution_open is None:
-                    continue
-
-                gross_delta = gross_deltas[symbol]
-                if gross_delta < 0:
-                    sell_shares = (-gross_delta) / execution_open
-                    gross_cash += (-gross_delta)
-                    remaining_shares = gross_positions.get(symbol, Decimal("0")) - sell_shares
-                    if remaining_shares <= Decimal("0.0000000001"):
-                        gross_positions.pop(symbol, None)
-                    else:
-                        gross_positions[symbol] = remaining_shares
-
-                net_delta = net_deltas[symbol]
-                if net_delta < 0:
-                    position = net_positions.get(symbol)
-                    if position is None:
-                        continue
-                    sell_notional = -net_delta
-                    sell_shares = sell_notional / execution_open
-                    sell_fee = sell_notional * transaction_cost_rate
-                    cost_basis_sold, holding_days = position.sell(sell_shares, current_date)
-                    net_cash += sell_notional - sell_fee
-                    realized_pnl = (sell_notional - sell_fee) - cost_basis_sold
-                    fill_rows.append(
-                        FillEvent(
-                            execution_date=current_date,
-                            signal_date=signal_date,
-                            symbol=symbol,
-                            action="SELL",
-                            shares=sell_shares,
-                            execution_price=execution_open,
-                            fees=sell_fee,
-                            net_cash_flow=sell_notional - sell_fee,
-                            realized_pnl=realized_pnl,
-                            holding_days=holding_days,
-                        )
-                    )
-                    total_fees += sell_fee
-                    rebalance_sell_notional += sell_notional
-                    rebalance_fees += sell_fee
-                    total_turnover_notional += sell_notional
-                    sold_count += 1
-                    if position.shares <= Decimal("0.0000000001"):
-                        net_positions.pop(symbol, None)
-
-            for symbol in all_symbols:
-                execution_open = current_open_prices[symbol]
-                if execution_open is None:
-                    continue
-
-                gross_delta = gross_deltas[symbol]
-                if gross_delta > 0:
-                    buy_shares = gross_delta / execution_open
-                    gross_cash -= gross_delta
-                    gross_positions[symbol] = gross_positions.get(symbol, Decimal("0")) + buy_shares
-
-                net_delta = net_deltas[symbol]
-                if net_delta > 0:
-                    buy_shares = net_delta / execution_open
-                    buy_fee = net_delta * transaction_cost_rate
-                    net_cash -= net_delta + buy_fee
-                    position = net_positions.get(symbol)
-                    if position is None:
-                        net_positions[symbol] = Position(
-                            shares=Decimal("0"),
-                            cost_basis=Decimal("0"),
-                            entry_mass=Decimal("0"),
-                        )
-                        position = net_positions[symbol]
-                    position.buy(buy_shares, net_delta + buy_fee, current_date)
-                    fill_rows.append(
-                        FillEvent(
-                            execution_date=current_date,
-                            signal_date=signal_date,
-                            symbol=symbol,
-                            action="BUY",
-                            shares=buy_shares,
-                            execution_price=execution_open,
-                            fees=buy_fee,
-                            net_cash_flow=-(net_delta + buy_fee),
-                        )
-                    )
-                    total_fees += buy_fee
-                    rebalance_buy_notional += net_delta
-                    rebalance_fees += buy_fee
-                    total_turnover_notional += net_delta
-
-            turnover = (
-                (rebalance_buy_notional + rebalance_sell_notional) / net_pre_trade_value
-                if net_pre_trade_value > 0
-                else Decimal("0")
-            )
-            note_fragments: list[str] = []
-            if len(selected_symbols) < input_data.top_n:
-                note_fragments.append("축소 포트폴리오")
-            if sold_count or rebalance_buy_notional:
-                note_fragments.append("필요 수량만 부분 리밸런스")
+        target_missing = [symbol for symbol in target_symbols if current_open_prices.get(symbol) is None]
+        if target_missing and allow_missing_target_hold:
+            quality_flags.add(f"{', '.join(target_missing[:2])} 시가가 없어 기존 자산을 유지했습니다.")
             summary_rows.append(
                 RebalanceSummary(
                     signal_date=signal_date,
                     execution_date=current_date,
-                    selected_count=len(selected_symbols),
-                    sold_count=sold_count,
-                    buy_notional=rebalance_buy_notional,
-                    sell_notional=rebalance_sell_notional,
-                    fees=rebalance_fees,
-                    turnover=turnover,
-                    notes=", ".join(note_fragments) if note_fragments else None,
+                    selected_count=len(target_symbols),
+                    sold_count=0,
+                    buy_notional=Decimal("0"),
+                    sell_notional=Decimal("0"),
+                    fees=Decimal("0"),
+                    turnover=Decimal("0"),
+                    notes=f"{note} (시가 누락으로 유지)",
                 )
             )
+            return None, False
+        if target_missing:
+            symbol_list = ", ".join(target_missing[:3])
+            return (
+                _build_unavailable_reason(
+                    code="missing_target_open",
+                    title="목표 자산의 체결 가격이 비어 있습니다",
+                    detail=f"{current_date.isoformat()} 체결일에 {symbol_list} 시가가 없어 목표 포트폴리오를 만들 수 없습니다.",
+                    facts=[f"누락 종목 수: {len(target_missing)}"],
+                    suggestions=["해당 기간을 피하거나 데이터 적재 상태를 확인해 주세요."],
+                ),
+                False,
+            )
+
+        gross_current_notionals = {
+            symbol: shares * current_open_prices[symbol]
+            for symbol, shares in gross_positions.items()
+            if current_open_prices[symbol] is not None
+        }
+        net_current_notionals = {
+            symbol: position.shares * current_open_prices[symbol]
+            for symbol, position in net_positions.items()
+            if current_open_prices[symbol] is not None
+        }
+        gross_pre_trade_value = gross_cash + sum(gross_current_notionals.values(), start=Decimal("0"))
+        net_pre_trade_value = net_cash + sum(net_current_notionals.values(), start=Decimal("0"))
+
+        gross_target_notional = gross_pre_trade_value / Decimal(len(target_symbols)) if target_symbols else Decimal("0")
+        net_target_notional = _solve_fee_aware_target_notional(
+            net_pre_trade_value,
+            net_current_notionals,
+            target_symbols,
+            transaction_cost_rate,
+        )
+
+        all_symbols = sorted(set(gross_positions) | set(net_positions) | set(target_symbols))
+        gross_deltas: dict[str, Decimal] = {}
+        net_deltas: dict[str, Decimal] = {}
+        for symbol in all_symbols:
+            gross_current = gross_current_notionals.get(symbol, Decimal("0"))
+            net_current = net_current_notionals.get(symbol, Decimal("0"))
+            target = gross_target_notional if symbol in target_symbols else Decimal("0")
+            gross_deltas[symbol] = target - gross_current
+            net_target = net_target_notional if symbol in target_symbols else Decimal("0")
+            net_deltas[symbol] = net_target - net_current
+
+        for symbol in all_symbols:
+            execution_open = current_open_prices[symbol]
+            if execution_open is None:
+                continue
+
+            gross_delta = gross_deltas[symbol]
+            if gross_delta < 0:
+                sell_shares = (-gross_delta) / execution_open
+                gross_cash += -gross_delta
+                remaining_shares = gross_positions.get(symbol, Decimal("0")) - sell_shares
+                if remaining_shares <= Decimal("0.0000000001"):
+                    gross_positions.pop(symbol, None)
+                else:
+                    gross_positions[symbol] = remaining_shares
+
+            net_delta = net_deltas[symbol]
+            if net_delta < 0:
+                position = net_positions.get(symbol)
+                if position is None:
+                    continue
+                sell_notional = -net_delta
+                sell_shares = sell_notional / execution_open
+                sell_fee = sell_notional * transaction_cost_rate
+                cost_basis_sold, holding_days = position.sell(sell_shares, current_date)
+                net_cash += sell_notional - sell_fee
+                realized_pnl = (sell_notional - sell_fee) - cost_basis_sold
+                fill_rows.append(
+                    FillEvent(
+                        execution_date=current_date,
+                        signal_date=signal_date,
+                        symbol=symbol,
+                        action="SELL",
+                        shares=sell_shares,
+                        execution_price=execution_open,
+                        fees=sell_fee,
+                        net_cash_flow=sell_notional - sell_fee,
+                        realized_pnl=realized_pnl,
+                        holding_days=holding_days,
+                    )
+                )
+                total_fees += sell_fee
+                rebalance_sell_notional += sell_notional
+                rebalance_fees += sell_fee
+                total_turnover_notional += sell_notional
+                sold_count += 1
+                if position.shares <= Decimal("0.0000000001"):
+                    net_positions.pop(symbol, None)
+
+        for symbol in all_symbols:
+            execution_open = current_open_prices[symbol]
+            if execution_open is None:
+                continue
+
+            gross_delta = gross_deltas[symbol]
+            if gross_delta > 0:
+                buy_shares = gross_delta / execution_open
+                gross_cash -= gross_delta
+                gross_positions[symbol] = gross_positions.get(symbol, Decimal("0")) + buy_shares
+
+            net_delta = net_deltas[symbol]
+            if net_delta > 0:
+                buy_shares = net_delta / execution_open
+                buy_fee = net_delta * transaction_cost_rate
+                net_cash -= net_delta + buy_fee
+                position = net_positions.get(symbol)
+                if position is None:
+                    net_positions[symbol] = Position(shares=Decimal("0"), cost_basis=Decimal("0"), entry_mass=Decimal("0"))
+                    position = net_positions[symbol]
+                position.buy(buy_shares, net_delta + buy_fee, current_date)
+                fill_rows.append(
+                    FillEvent(
+                        execution_date=current_date,
+                        signal_date=signal_date,
+                        symbol=symbol,
+                        action="BUY",
+                        shares=buy_shares,
+                        execution_price=execution_open,
+                        fees=buy_fee,
+                        net_cash_flow=-(net_delta + buy_fee),
+                    )
+                )
+                total_fees += buy_fee
+                rebalance_buy_notional += net_delta
+                rebalance_fees += buy_fee
+                total_turnover_notional += net_delta
+
+        turnover = (
+            (rebalance_buy_notional + rebalance_sell_notional) / net_pre_trade_value
+            if net_pre_trade_value > 0
+            else Decimal("0")
+        )
+        summary_rows.append(
+            RebalanceSummary(
+                signal_date=signal_date,
+                execution_date=current_date,
+                selected_count=len(target_symbols),
+                sold_count=sold_count,
+                buy_notional=rebalance_buy_notional,
+                sell_notional=rebalance_sell_notional,
+                fees=rebalance_fees,
+                turnover=turnover,
+                notes=note,
+            )
+        )
+        portfolio_state = resulting_state
+        return None, True
+
+    for current_date in calendar_in_range:
+        if pending_action and pending_action.execution_date == current_date:
+            if pending_action.action_type == "target":
+                error_reason, changed = execute_target_portfolio(
+                    current_date=current_date,
+                    signal_date=pending_action.signal_date,
+                    target_symbols=list(pending_action.target_symbols),
+                    note=pending_action.note,
+                    resulting_state=pending_action.resulting_state,
+                    allow_missing_target_hold=pending_action.target_symbols == (safe_asset,),
+                )
+                if error_reason is not None:
+                    return SimulationResult(
+                        state=PageState.ERROR,
+                        equity_curve=[],
+                        summary_rows=[],
+                        fill_rows=[],
+                        warnings=[],
+                        data_quality_flags=[],
+                        summary_metrics={},
+                        unavailable_reasons=[error_reason],
+                        error_message=error_reason.detail,
+                    )
+            elif pending_action.action_type == "hold":
+                summary_rows.append(
+                    RebalanceSummary(
+                        signal_date=pending_action.signal_date,
+                        execution_date=current_date,
+                        selected_count=len(pending_action.target_symbols),
+                        sold_count=0,
+                        buy_notional=Decimal("0"),
+                        sell_notional=Decimal("0"),
+                        fees=Decimal("0"),
+                        turnover=Decimal("0"),
+                        notes=pending_action.note,
+                    )
+                )
+                portfolio_state = pending_action.resulting_state
+            pending_action = None
 
             if benchmark_shares is None and first_execution_date == current_date:
                 benchmark_entry_price = execution_open_map.get(("SPY", current_date))
@@ -845,6 +1035,141 @@ def simulate_backtest(
             )
         )
 
+        if current_date in signal_dates:
+            execution_date = schedule.get(current_date)
+            month_signal = _evaluate_month_end_overlay_signal(input_data.market_timing_overlay, current_date, history_map, index_map)
+            if month_signal.risk_on is None:
+                overlay_unavailable_facts.extend(f"{current_date.isoformat()} 월말: {fact}" for fact in month_signal.facts)
+            if execution_date is None:
+                continue
+            selected_rows = selected_by_signal.get(current_date, [])
+
+            if input_data.market_timing_overlay == MarketTimingOverlayId.NONE:
+                if selected_rows:
+                    pending_action = PendingAction(
+                        action_type="target",
+                        signal_date=current_date,
+                        execution_date=execution_date,
+                        target_symbols=tuple(row.symbol for row in selected_rows),
+                        note="month-end risk_on: factor rebalance",
+                        resulting_state="invested_in_factor",
+                    )
+                elif portfolio_state == "invested_in_factor":
+                    pending_action = PendingAction(
+                        action_type="hold",
+                        signal_date=current_date,
+                        execution_date=execution_date,
+                        target_symbols=tuple(),
+                        note="month-end risk_on: factor hold (no executable basket)",
+                        resulting_state="invested_in_factor",
+                    )
+                continue
+
+            if portfolio_state == "parked_in_safe_asset":
+                if month_signal.risk_on is True and selected_rows:
+                    pending_action = PendingAction(
+                        action_type="target",
+                        signal_date=current_date,
+                        execution_date=execution_date,
+                        target_symbols=tuple(row.symbol for row in selected_rows),
+                        note=f"month-end risk_on: {safe_asset} -> factor basket",
+                        resulting_state="invested_in_factor",
+                    )
+                else:
+                    if month_signal.risk_on is True and not selected_rows:
+                        quality_flags.add("월말 재진입 조건은 충족했지만 해당 월 실행 가능한 팩터 바스켓이 없어 안전자산을 유지했습니다.")
+                    pending_action = PendingAction(
+                        action_type="hold",
+                        signal_date=current_date,
+                        execution_date=execution_date,
+                        target_symbols=(safe_asset,),
+                        note="month-end risk_off: safe asset hold",
+                        resulting_state="parked_in_safe_asset",
+                    )
+                continue
+
+            if month_signal.risk_on is False:
+                pending_action = PendingAction(
+                    action_type="target",
+                    signal_date=current_date,
+                    execution_date=execution_date,
+                    target_symbols=(safe_asset,),
+                    note=f"month-end risk_off: factor basket -> {safe_asset}",
+                    resulting_state="parked_in_safe_asset",
+                )
+            elif selected_rows:
+                pending_action = PendingAction(
+                    action_type="target",
+                    signal_date=current_date,
+                    execution_date=execution_date,
+                    target_symbols=tuple(row.symbol for row in selected_rows),
+                    note="month-end risk_on: factor rebalance",
+                    resulting_state="invested_in_factor",
+                )
+            elif portfolio_state == "invested_in_factor":
+                pending_action = PendingAction(
+                    action_type="hold",
+                    signal_date=current_date,
+                    execution_date=execution_date,
+                    target_symbols=tuple(),
+                    note="month-end risk_on: factor hold (no executable basket)",
+                    resulting_state="invested_in_factor",
+                )
+            continue
+
+        if (
+            input_data.market_timing_overlay != MarketTimingOverlayId.NONE
+            and portfolio_state == "invested_in_factor"
+            and pending_action is None
+        ):
+            daily_signal = _evaluate_daily_risk_off(input_data.market_timing_overlay, current_date, history_map, index_map)
+            if daily_signal.risk_on is None:
+                overlay_unavailable_facts.extend(f"{current_date.isoformat()} 일간: {fact}" for fact in daily_signal.facts)
+            if daily_signal.risk_on is False:
+                execution_date = next_date_by_date.get(current_date)
+                if execution_date is not None:
+                    pending_action = PendingAction(
+                        action_type="target",
+                        signal_date=current_date,
+                        execution_date=execution_date,
+                        target_symbols=(safe_asset,),
+                        note=f"daily risk_off: factor basket -> {safe_asset}",
+                        resulting_state="parked_in_safe_asset",
+                    )
+
+    if first_execution_date is not None and not any(point.benchmark_equity is not None for point in equity_curve):
+        quality_flags.add("SPY 첫 체결일 기준값이 없어 이번 실행에서는 비교선을 그리지 못했습니다.")
+
+    if not summary_rows:
+        if overlay_unavailable_facts:
+            unavailable_reasons.append(
+                _build_unavailable_reason(
+                    code="overlay_history_unavailable",
+                    title="오버레이 신호 계산 이력이 부족합니다",
+                    detail="선택한 기간 초반에 마켓타이밍 신호를 계산할 가격 이력이 부족했습니다.",
+                    facts=overlay_unavailable_facts[:6],
+                    suggestions=["시작일을 더 뒤로 늦추거나 안전자산이 더 오래된 구간을 선택해 보세요."],
+                )
+            )
+        return SimulationResult(
+            state=PageState.INSUFFICIENT_HISTORY if overlay_unavailable_facts else PageState.NO_DATA,
+            equity_curve=[],
+            summary_rows=[],
+            fill_rows=[],
+            warnings=[],
+            data_quality_flags=[],
+            summary_metrics={},
+            unavailable_reasons=unavailable_reasons or [
+                _build_unavailable_reason(
+                    code="no_executable_results",
+                    title="실행 가능한 결과를 만들지 못했습니다",
+                    detail="선택한 기간에는 팩터 바스켓과 오버레이를 함께 만족하는 실행 구간이 없었습니다.",
+                    suggestions=["기간을 넓히거나 오버레이를 끄고 비교해 보세요."],
+                )
+            ],
+            error_message="선택한 기간에는 실행 가능한 결과를 만들지 못했습니다.",
+        )
+
     summary_metrics = _calculate_summary_metrics(
         Decimal(input_data.initial_capital),
         equity_curve,
@@ -858,10 +1183,9 @@ def simulate_backtest(
         Decimal(summary_metrics["net_total_return"]),
         shortfall_notes,
         missing_execution_open_count,
-        insufficient_history,
+        insufficient_history or bool(overlay_unavailable_facts),
     )
     if first_execution_date is not None and not any(point.benchmark_equity is not None for point in equity_curve):
-        quality_flags.add("SPY 첫 체결일 기준값이 없어 이번 실행에서는 비교선을 그리지 못했습니다.")
         warning_events.append(
             WarningEvent(
                 title="SPY 비교선 제외",

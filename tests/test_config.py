@@ -20,9 +20,16 @@ def test_universe_defaults() -> None:
     assert settings.default_cohort == "us_liquidity_700_v1"
     assert settings.universe_buffer_cohort == "us_liquidity_900_buffer_v1"
     assert settings.universe_target_size == 700
-    assert settings.benchmark_market_symbols == ("SPY",)
+    assert settings.support_market_symbols == ("SPY", "VT", "IEF", "SGOV", "JPST")
+    assert settings.benchmark_market_symbols == settings.support_market_symbols
 
 
-def test_benchmark_market_symbols_accept_csv() -> None:
-    settings = Settings(BENCHMARK_MARKET_SYMBOLS="spy, qqq , dia")
-    assert settings.benchmark_market_symbols == ("SPY", "QQQ", "DIA")
+def test_support_market_symbols_accept_csv() -> None:
+    settings = Settings(SUPPORT_MARKET_SYMBOLS="spy, qqq , dia")
+    assert settings.support_market_symbols == ("SPY", "QQQ", "DIA")
+
+
+def test_support_market_symbols_accept_csv_from_env(monkeypatch) -> None:
+    monkeypatch.setenv("SUPPORT_MARKET_SYMBOLS", "spy,vt,ief,sgov,jpst")
+    settings = Settings()
+    assert settings.support_market_symbols == ("SPY", "VT", "IEF", "SGOV", "JPST")

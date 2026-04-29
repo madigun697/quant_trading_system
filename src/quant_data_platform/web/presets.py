@@ -12,6 +12,17 @@ class StrategyPresetId(StrEnum):
     QUALITY_LOWVOL = "quality_lowvol"
 
 
+class MarketTimingOverlayId(StrEnum):
+    NONE = "none"
+    EMERGENCY_BRAKE_ASYMMETRIC = "emergency_brake_asymmetric"
+    CANARY_ASSET_SIGNAL = "canary_asset_signal"
+
+
+class SafeAssetSymbol(StrEnum):
+    SGOV = "SGOV"
+    JPST = "JPST"
+
+
 class TransactionCostPreset(StrEnum):
     LOW = "low"
     BASE = "base"
@@ -37,6 +48,28 @@ class StrategyPreset:
     rationale: str
     execution_notes: tuple[str, ...]
     risk_notes: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class MarketTimingOverlay:
+    overlay_id: MarketTimingOverlayId
+    label: str
+    description: str
+    lookback_days: int
+    lookback_label: str
+    rationale: str
+    signal_asset: str
+    comparison_asset: str | None
+    execution_notes: tuple[str, ...]
+    risk_notes: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class SafeAssetOption:
+    symbol: SafeAssetSymbol
+    label: str
+    description: str
+    details: str
 
 
 @dataclass(frozen=True)
@@ -170,6 +203,80 @@ STRATEGY_PRESETS: dict[StrategyPresetId, StrategyPreset] = {
 }
 
 
+MARKET_TIMING_OVERLAYS: dict[MarketTimingOverlayId, MarketTimingOverlay] = {
+    MarketTimingOverlayId.NONE: MarketTimingOverlay(
+        overlay_id=MarketTimingOverlayId.NONE,
+        label="None",
+        description="기존 팩터 전략을 그대로 운용하고 별도 마켓타이밍 필터는 사용하지 않습니다.",
+        lookback_days=0,
+        lookback_label="추가 신호 데이터가 필요하지 않습니다.",
+        rationale="가장 단순한 기준선입니다. 팩터 전략 자체의 월말 리밸런싱 성과를 그대로 비교할 때 사용합니다.",
+        signal_asset="SPY",
+        comparison_asset=None,
+        execution_notes=(
+            "월말 신호 기준으로만 팩터 포트폴리오를 리밸런싱합니다.",
+        ),
+        risk_notes=(
+            "하락장에서도 팩터 포트폴리오를 계속 보유합니다.",
+        ),
+    ),
+    MarketTimingOverlayId.EMERGENCY_BRAKE_ASYMMETRIC: MarketTimingOverlay(
+        overlay_id=MarketTimingOverlayId.EMERGENCY_BRAKE_ASYMMETRIC,
+        label="Emergency Brake",
+        description="하락 신호는 매일 빠르게 보고 피하고, 재진입은 월말에 더 엄격하게 확인하는 비대칭 오버레이입니다.",
+        lookback_days=400,
+        lookback_label="SPY 50일선, 200일선, 20거래일 수익률 계산을 위해 약 1년 이상 가격 이력이 필요합니다.",
+        rationale="시장 급락 초기에 빠르게 브레이크를 밟고, 반등이 확인될 때만 다시 팩터 포트폴리오에 들어가 whipsaw를 줄이려는 오버레이입니다.",
+        signal_asset="SPY",
+        comparison_asset=None,
+        execution_notes=(
+            "매일 종가 기준으로 SPY가 50일선 아래면 다음 거래일에 안전자산으로 이동합니다.",
+            "월말에는 SPY가 200일선 위이고 최근 20거래일 수익률이 양수일 때만 팩터 포트폴리오로 재진입합니다.",
+            "월중에 risk-on이 다시 켜져도 월말 전에는 재진입하지 않습니다.",
+        ),
+        risk_notes=(
+            "급반등 구간에서는 재진입이 늦어질 수 있습니다.",
+            "SPY 가격 데이터 품질과 휴장일 캘린더에 민감합니다.",
+        ),
+    ),
+    MarketTimingOverlayId.CANARY_ASSET_SIGNAL: MarketTimingOverlay(
+        overlay_id=MarketTimingOverlayId.CANARY_ASSET_SIGNAL,
+        label="Canary Asset Signal",
+        description="글로벌 위험자산 VT와 방어 신호자산 IEF의 상대 모멘텀으로 risk-on / risk-off를 가르는 오버레이입니다.",
+        lookback_days=180,
+        lookback_label="VT와 IEF의 약 84거래일 수익률을 계산하기 위해 최소 6개월 정도의 가격 이력이 필요합니다.",
+        rationale="개별 종목 노이즈보다 자산군 간 위험 선호 흐름을 따라가면서 팩터 포트폴리오의 큰 손실 구간을 피하려는 오버레이입니다.",
+        signal_asset="VT",
+        comparison_asset="IEF",
+        execution_notes=(
+            "VT 84거래일 수익률이 IEF 84거래일 수익률보다 높으면 risk-on, 아니면 risk-off입니다.",
+            "risk-off가 감지되면 익일 시가에 선택한 안전자산으로 이동합니다.",
+            "월말에만 다시 신호를 확인해 팩터 포트폴리오 재진입 여부를 결정합니다.",
+        ),
+        risk_notes=(
+            "IEF는 신호 비교 자산일 뿐 실제 파킹 자산은 아닙니다.",
+            "VT나 IEF의 긴 가격 이력이 부족한 초기 기간에는 실행이 제한될 수 있습니다.",
+        ),
+    ),
+}
+
+
+SAFE_ASSET_OPTIONS: dict[SafeAssetSymbol, SafeAssetOption] = {
+    SafeAssetSymbol.SGOV: SafeAssetOption(
+        symbol=SafeAssetSymbol.SGOV,
+        label="SGOV",
+        description="미국 초단기 국채 ETF",
+        details="금리 민감도가 낮고 파킹 자산 성격이 강합니다. 다만 상장 이력이 짧아 과거 구간 제약이 큽니다.",
+    ),
+    SafeAssetSymbol.JPST: SafeAssetOption(
+        symbol=SafeAssetSymbol.JPST,
+        label="JPST",
+        description="초단기 회사채 중심 초단기 채권 ETF",
+        details="현금성에 가깝지만 SGOV보다는 약간의 신용 스프레드 노출이 있습니다. 상장 이력은 SGOV보다 깁니다.",
+    ),
+}
+
+
 def _factor_groups(preset: StrategyPreset) -> tuple[list[str], list[str]]:
     higher = [factor.label for factor in preset.factor_specs if factor.higher_is_better]
     lower = [factor.label for factor in preset.factor_specs if not factor.higher_is_better]
@@ -178,6 +285,14 @@ def _factor_groups(preset: StrategyPreset) -> tuple[list[str], list[str]]:
 
 def get_strategy_preset(preset_id: StrategyPresetId) -> StrategyPreset:
     return STRATEGY_PRESETS[preset_id]
+
+
+def get_market_timing_overlay(overlay_id: MarketTimingOverlayId) -> MarketTimingOverlay:
+    return MARKET_TIMING_OVERLAYS[overlay_id]
+
+
+def get_safe_asset_option(symbol: SafeAssetSymbol) -> SafeAssetOption:
+    return SAFE_ASSET_OPTIONS[symbol]
 
 
 def get_transaction_cost_option(preset: TransactionCostPreset) -> TransactionCostOption:
@@ -199,8 +314,39 @@ def serialize_strategy_preset(preset: StrategyPreset) -> dict[str, Any]:
     }
 
 
+def serialize_market_timing_overlay(overlay: MarketTimingOverlay) -> dict[str, Any]:
+    return {
+        "id": overlay.overlay_id.value,
+        "label": overlay.label,
+        "description": overlay.description,
+        "lookback_label": overlay.lookback_label,
+        "rationale": overlay.rationale,
+        "signal_asset": overlay.signal_asset,
+        "comparison_asset": overlay.comparison_asset,
+        "execution_notes": list(overlay.execution_notes),
+        "risk_notes": list(overlay.risk_notes),
+    }
+
+
+def serialize_safe_asset_option(option: SafeAssetOption) -> dict[str, Any]:
+    return {
+        "id": option.symbol.value,
+        "label": option.label,
+        "description": option.description,
+        "details": option.details,
+    }
+
+
 def list_preset_options() -> list[dict[str, Any]]:
     return [serialize_strategy_preset(preset) for preset in STRATEGY_PRESETS.values()]
+
+
+def list_overlay_options() -> list[dict[str, Any]]:
+    return [serialize_market_timing_overlay(option) for option in MARKET_TIMING_OVERLAYS.values()]
+
+
+def list_safe_asset_options() -> list[dict[str, Any]]:
+    return [serialize_safe_asset_option(option) for option in SAFE_ASSET_OPTIONS.values()]
 
 
 def serialize_transaction_cost_option(option: TransactionCostOption) -> dict[str, Any]:

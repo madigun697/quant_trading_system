@@ -36,6 +36,9 @@ class FakeRepository:
     def fetch_spy_calendar(self, start_date: date, end_date: date) -> list[date]:
         return [date(2024, 1, 31), date(2024, 2, 1), date(2024, 2, 29), date(2024, 3, 1)]
 
+    def compute_factor_buffer_start(self, preset_id: StrategyPresetId, start_date: date) -> date:
+        return start_date
+
     def fetch_factor_rows(self, preset_id: StrategyPresetId, signal_dates: list[date]) -> list[FactorSnapshotRow]:
         return [
             FactorSnapshotRow(
@@ -112,6 +115,8 @@ def test_error_context_uses_raw_form_values_for_selected_details() -> None:
         message="입력값을 다시 확인해 주세요.",
         form_values={
             "strategy_preset": StrategyPresetId.QUALITY_LOWVOL.value,
+            "market_timing_overlay": "none",
+            "safe_asset_symbol": "SGOV",
             "start_date": "2024-01-01",
             "end_date": "2023-01-01",
             "initial_capital": "1000",
@@ -166,7 +171,7 @@ def test_build_context_fetches_daily_closes_only_for_selected_symbols() -> None:
     )
     context = service.build_context(form)
     assert context.state == PageState.SUCCESS
-    assert repo.daily_close_symbols == ["AAA"]
+    assert repo.daily_close_symbols == ["AAA", "IEF", "SGOV", "SPY", "VT"]
 
 
 def test_build_context_returns_friendly_error_when_readiness_fails() -> None:
@@ -189,6 +194,28 @@ def test_build_context_returns_friendly_error_when_readiness_fails() -> None:
     assert context.state == PageState.ERROR
     assert context.http_status_code == 503
     assert "docker compose up -d postgres backtest-web" in (context.error_message or "")
+
+
+def test_build_context_returns_friendly_error_when_support_symbol_data_is_missing() -> None:
+    repo = FakeRepository()
+    repo.readiness = ReadinessStatus(
+        ok=False,
+        code="missing_support_symbol_data",
+        detail="지원 심볼 가격 이력이 없습니다: VT, IEF",
+    )
+    service = BacktestPageService(repo)
+    form = BacktestFormInput(
+        strategy_preset=StrategyPresetId.VALUE_QUALITY,
+        start_date=date(2024, 1, 1),
+        end_date=date(2024, 2, 1),
+        initial_capital=Decimal("1000"),
+        top_n=10,
+        transaction_cost_preset=TransactionCostPreset.CONSERVATIVE,
+    )
+    context = service.build_context(form)
+    assert context.state == PageState.ERROR
+    assert context.http_status_code == 503
+    assert "지원 심볼 데이터" in (context.error_message or "")
 
 
 def test_build_context_wraps_runtime_database_errors() -> None:

@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from typing import Annotated
 
-from pydantic import Field, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field, field_validator, model_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -37,23 +38,38 @@ class Settings(BaseSettings):
     tiingo_discovery_batch_size: int = Field(default=200, alias="TIINGO_DISCOVERY_BATCH_SIZE")
     yfinance_batch_size: int = Field(default=100, alias="YFINANCE_BATCH_SIZE")
     sec_daily_request_budget: int = Field(default=50, alias="SEC_DAILY_REQUEST_BUDGET")
-    benchmark_market_symbols: tuple[str, ...] = Field(default=("SPY",), alias="BENCHMARK_MARKET_SYMBOLS")
+    support_market_symbols: Annotated[tuple[str, ...], NoDecode] = Field(
+        default=("SPY", "VT", "IEF", "SGOV", "JPST"),
+        alias="SUPPORT_MARKET_SYMBOLS",
+    )
     yfinance_timeout_seconds: float = Field(default=30.0, alias="YFINANCE_TIMEOUT_SECONDS")
     alpha_vantage_throttle_seconds: float = Field(default=15.0, alias="ALPHA_VANTAGE_THROTTLE_SECONDS")
     tiingo_throttle_seconds: float = Field(default=1.0, alias="TIINGO_THROTTLE_SECONDS")
 
-    @field_validator("benchmark_market_symbols", mode="before")
+    @model_validator(mode="before")
     @classmethod
-    def _normalize_benchmark_market_symbols(cls, value: object) -> tuple[str, ...] | object:
+    def _backfill_support_market_symbols(cls, value: object) -> object:
+        if isinstance(value, dict):
+            if "SUPPORT_MARKET_SYMBOLS" not in value and "BENCHMARK_MARKET_SYMBOLS" in value:
+                value = {**value, "SUPPORT_MARKET_SYMBOLS": value["BENCHMARK_MARKET_SYMBOLS"]}
+        return value
+
+    @field_validator("support_market_symbols", mode="before")
+    @classmethod
+    def _normalize_support_market_symbols(cls, value: object) -> tuple[str, ...] | object:
         if value is None:
-            return ("SPY",)
+            return ("SPY", "VT", "IEF", "SGOV", "JPST")
         if isinstance(value, str):
             tokens = [token.strip().upper() for token in value.split(",") if token.strip()]
-            return tuple(tokens or ["SPY"])
+            return tuple(tokens or ["SPY", "VT", "IEF", "SGOV", "JPST"])
         if isinstance(value, (list, tuple, set)):
             tokens = [str(token).strip().upper() for token in value if str(token).strip()]
-            return tuple(tokens or ["SPY"])
+            return tuple(tokens or ["SPY", "VT", "IEF", "SGOV", "JPST"])
         return value
+
+    @property
+    def benchmark_market_symbols(self) -> tuple[str, ...]:
+        return self.support_market_symbols
 
     @property
     def postgres_dsn(self) -> str:
