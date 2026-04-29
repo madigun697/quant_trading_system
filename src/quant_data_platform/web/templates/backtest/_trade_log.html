@@ -1,81 +1,93 @@
 <section class="log-grid">
-  <section class="panel-card">
-    <div class="panel-header">
-      <h2>리밸런스 요약 로그</h2>
-      <p>매월 얼마를 실제로 사고팔았는지, 그리고 리밸런스 직전 자산 대비 회전율이 얼마나 되는지 빠르게 읽는 표입니다.</p>
-    </div>
-    <div class="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th>신호일</th>
-            <th>체결일</th>
-            <th>선택 종목</th>
-            <th>매도 종목</th>
-            <th>매수 금액</th>
-            <th>매도 금액</th>
-            <th>비용</th>
-            <th>회전율</th>
-            <th>메모</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for row in trade_log_summary %}
+  <details class="panel-card disclosure-card" open>
+    <summary class="disclosure-summary">
+      <div class="panel-header panel-header--tight">
+        <h2>리밸런스 요약 로그</h2>
+        <p>매월 얼마를 실제로 사고팔았는지, 그리고 리밸런스 직전 자산 대비 회전율이 얼마나 되는지 빠르게 읽는 표입니다.</p>
+        <p class="disclosure-summary__meta">{{ trade_log_summary | length }}회 리밸런스</p>
+      </div>
+      <span class="disclosure-pill" aria-hidden="true"></span>
+    </summary>
+    <div class="disclosure-body">
+      <div class="table-wrap">
+        <table>
+          <thead>
             <tr>
-              <td>{{ row.signal_date }}</td>
-              <td>{{ row.execution_date }}</td>
-              <td>{{ row.selected_count }}</td>
-              <td>{{ row.sold_count }}</td>
-              <td>{{ row.buy_notional }}</td>
-              <td>{{ row.sell_notional }}</td>
-              <td>{{ row.fees }}</td>
-              <td>{{ row.turnover }}</td>
-              <td>{{ row.notes or '-' }}</td>
+              <th>신호일</th>
+              <th>체결일</th>
+              <th>선택 종목</th>
+              <th>매도 종목</th>
+              <th>매수 금액</th>
+              <th>매도 금액</th>
+              <th>비용</th>
+              <th>회전율</th>
+              <th>메모</th>
             </tr>
-          {% endfor %}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {% for row in trade_log_summary %}
+              <tr>
+                <td>{{ row.signal_date }}</td>
+                <td>{{ row.execution_date }}</td>
+                <td>{{ row.selected_count }}</td>
+                <td>{{ row.sold_count }}</td>
+                <td>{{ row.buy_notional }}</td>
+                <td>{{ row.sell_notional }}</td>
+                <td>{{ row.fees }}</td>
+                <td>{{ row.turnover }}</td>
+                <td>{{ row.notes or '-' }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
     </div>
-  </section>
+  </details>
 
-  <section class="panel-card">
-    <div class="panel-header">
-      <h2>상세 체결 로그</h2>
-      <p>종목별 체결 내역을 그대로 보여 주므로 계산이 맞는지 직접 검산할 수 있습니다.</p>
-    </div>
-    <div class="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th>체결일</th>
-            <th>신호일</th>
-            <th>종목</th>
-            <th>동작</th>
-            <th>수량</th>
-            <th>체결가</th>
-            <th>비용</th>
-            <th>순현금흐름</th>
-            <th>실현손익</th>
-            <th>보유기간</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for row in trade_log_rows %}
+  <details class="panel-card disclosure-card">
+    <summary class="disclosure-summary">
+      <div class="panel-header panel-header--tight">
+        <h2>상세 체결 로그</h2>
+        <p>종목별 체결 내역을 그대로 보여 주므로 계산이 맞는지 직접 검산할 수 있습니다.</p>
+        <p class="disclosure-summary__meta">{{ trade_log_rows | length }}건 체결</p>
+      </div>
+      <span class="disclosure-pill" aria-hidden="true"></span>
+    </summary>
+    <div class="disclosure-body">
+      <div class="table-wrap">
+        <table>
+          <thead>
             <tr>
-              <td>{{ row.execution_date }}</td>
-              <td>{{ row.signal_date }}</td>
-              <td>{{ row.symbol }}</td>
-              <td>{{ row.action }}</td>
-              <td>{{ row.shares }}</td>
-              <td>{{ row.execution_price }}</td>
-              <td>{{ row.fees }}</td>
-              <td>{{ row.net_cash_flow }}</td>
-              <td>{{ row.realized_pnl or '-' }}</td>
-              <td>{{ row.holding_days or '-' }}</td>
+              <th>체결일</th>
+              <th>신호일</th>
+              <th>종목</th>
+              <th>동작</th>
+              <th>수량</th>
+              <th>체결가</th>
+              <th>비용</th>
+              <th>순현금흐름</th>
+              <th>실현손익</th>
+              <th>보유기간</th>
             </tr>
-          {% endfor %}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {% for row in trade_log_rows %}
+              <tr>
+                <td>{{ row.execution_date }}</td>
+                <td>{{ row.signal_date }}</td>
+                <td>{{ row.symbol }}</td>
+                <td>{{ row.action }}</td>
+                <td>{{ row.shares }}</td>
+                <td>{{ row.execution_price }}</td>
+                <td>{{ row.fees }}</td>
+                <td>{{ row.net_cash_flow }}</td>
+                <td>{{ row.realized_pnl or '-' }}</td>
+                <td>{{ row.holding_days or '-' }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
     </div>
-  </section>
+  </details>
 </section>

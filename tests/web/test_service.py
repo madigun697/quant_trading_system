@@ -1,12 +1,14 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
+from pathlib import Path
 
 import psycopg
 from quant_data_platform.web.presets import StrategyPresetId, TransactionCostPreset
 from quant_data_platform.web.repositories.backtest_repo import BenchmarkValueRow, DailyCloseRow, ExecutionPriceRow, FactorSnapshotRow, ReadinessStatus
 from quant_data_platform.web.schemas import BacktestFormInput, PageState
+from quant_data_platform.web.services.backtest_result_writer import BacktestResultWriter
 from quant_data_platform.web.services.backtest_service import BacktestPageService
 
 
@@ -252,3 +254,108 @@ def test_build_context_surfaces_query_errors_without_masking_as_unreachable() ->
     assert context.state == PageState.ERROR
     assert context.http_status_code == 500
     assert "데이터베이스 오류가 발생했습니다" in (context.error_message or "")
+
+
+def test_save_context_writes_result_bundle(tmp_path: Path) -> None:
+    repo = FakeRepository()
+    writer = BacktestResultWriter(tmp_path / "backtest_result")
+    service = BacktestPageService(repo, result_writer=writer)
+    form = BacktestFormInput(
+        strategy_preset=StrategyPresetId.VALUE_QUALITY,
+        start_date=date(2024, 1, 1),
+        end_date=date(2024, 2, 1),
+        initial_capital=Decimal("1000"),
+        top_n=10,
+        transaction_cost_preset=TransactionCostPreset.CONSERVATIVE,
+    )
+
+    context = service.save_context(form, saved_at=datetime(2024, 4, 1, 9, 30, 0))
+
+    assert context.state == PageState.SUCCESS
+    assert context.save_directory is not None
+    assert context.save_success_message is not None
+    result_dir = Path(context.save_directory)
+    assert result_dir.name == "20240401_093000"
+    assert (result_dir / "backtest_input_summary.md").exists()
+    assert (result_dir / "rebalance_summary.csv").exists()
+    assert (result_dir / "fill_log.csv").exists()
+    markdown = (result_dir / "backtest_input_summary.md").read_text(encoding="utf-8")
+    assert "## 입력값 요약" in markdown
+    assert "## 핵심 성과 요약" in markdown
+    rebalance_csv = (result_dir / "rebalance_summary.csv").read_text(encoding="utf-8")
+    assert "signal_date,execution_date,selected_count,sold_count" in rebalance_csv
+    fill_csv = (result_dir / "fill_log.csv").read_text(encoding="utf-8")
+    assert "execution_date,signal_date,symbol,action,shares" in fill_csv
+
+
+def test_save_context_skips_writing_when_result_is_not_success(tmp_path: Path) -> None:
+    class NoDataRepository(FakeRepository):
+        def fetch_factor_rows(self, preset_id: StrategyPresetId, signal_dates: list[date]) -> list[FactorSnapshotRow]:
+            return []
+
+        def fetch_earliest_available_trade_date(self, preset_id: StrategyPresetId) -> date | None:
+            return None
+
+    writer = BacktestResultWriter(tmp_path / "backtest_result")
+    service = BacktestPageService(NoDataRepository(), result_writer=writer)
+    form = BacktestFormInput(
+        strategy_preset=StrategyPresetId.VALUE_QUALITY,
+        start_date=date(2024, 1, 1),
+        end_date=date(2024, 2, 1),
+        initial_capital=Decimal("1000"),
+        top_n=10,
+        transaction_cost_preset=TransactionCostPreset.CONSERVATIVE,
+    )
+
+    context = service.save_context(form, saved_at=datetime(2024, 4, 1, 9, 30, 0))
+
+    assert context.state == PageState.NO_DATA
+    assert context.save_error_message is not None
+    assert context.save_directory is None
+    assert not (tmp_path / "backtest_result").exists()
+
+
+def test_save_context_avoids_timestamp_collision(tmp_path: Path) -> None:
+    repo = FakeRepository()
+    writer = BacktestResultWriter(tmp_path / "backtest_result")
+    service = BacktestPageService(repo, result_writer=writer)
+    collision_dir = tmp_path / "backtest_result" / "20240401_093000"
+    collision_dir.mkdir(parents=True)
+    form = BacktestFormInput(
+        strategy_preset=StrategyPresetId.VALUE_QUALITY,
+        start_date=date(2024, 1, 1),
+        end_date=date(2024, 2, 1),
+        initial_capital=Decimal("1000"),
+        top_n=10,
+        transaction_cost_preset=TransactionCostPreset.CONSERVATIVE,
+    )
+
+    context = service.save_context(form, saved_at=datetime(2024, 4, 1, 9, 30, 0))
+
+    assert context.save_directory is not None
+    assert Path(context.save_directory).name == "20240401_093001"
+
+
+def test_save_context_cleans_up_partial_directory_on_write_failure(tmp_path: Path) -> None:
+    class BrokenWriter(BacktestResultWriter):
+        def _write_fill_csv(self, path: Path, simulation) -> None:
+            raise OSError("disk full")
+
+    repo = FakeRepository()
+    writer = BrokenWriter(tmp_path / "backtest_result")
+    service = BacktestPageService(repo, result_writer=writer)
+    form = BacktestFormInput(
+        strategy_preset=StrategyPresetId.VALUE_QUALITY,
+        start_date=date(2024, 1, 1),
+        end_date=date(2024, 2, 1),
+        initial_capital=Decimal("1000"),
+        top_n=10,
+        transaction_cost_preset=TransactionCostPreset.CONSERVATIVE,
+    )
+
+    context = service.save_context(form, saved_at=datetime(2024, 4, 1, 9, 30, 0))
+
+    assert context.save_directory is None
+    assert context.save_error_message is not None
+    assert context.http_status_code == 500
+    assert not (tmp_path / "backtest_result" / "20240401_093000").exists()

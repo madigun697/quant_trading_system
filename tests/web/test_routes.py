@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 import pytest
@@ -80,6 +81,16 @@ class FakeService:
             context.http_status_code = 503
         return context
 
+    def save_context(self, form) -> BacktestPageContext:
+        context = self.build_context(form)
+        if context.state == PageState.SUCCESS:
+            context.save_directory = str(Path("/tmp/backtest_result/20260429_120000"))
+            context.save_success_message = f"백테스트 결과를 저장했습니다: {context.save_directory}"
+        else:
+            reason = context.error_message or "현재 조건에서는 저장 가능한 결과를 만들지 못했습니다."
+            context.save_error_message = f"결과 저장을 완료하지 못했습니다. {reason}"
+        return context
+
 
 def test_get_backtest_returns_empty_state() -> None:
     app = create_app(service=FakeService())
@@ -117,6 +128,8 @@ def test_post_valid_form_returns_success(preset_id: str) -> None:
     )
     assert response.status_code == 200
     assert "핵심 성과 요약" in response.text
+    assert 'formaction="http://testserver/backtest/save"' in response.text
+    assert 'action="http://testserver/backtest"' in response.text
 
 
 def test_post_invalid_form_returns_error_state() -> None:
@@ -234,3 +247,93 @@ def test_post_runtime_error_uses_context_status_code() -> None:
     )
     assert response.status_code == 503
     assert "백테스트 데이터베이스에 연결하지 못했습니다." in response.text
+
+
+def test_post_save_valid_form_returns_success_message() -> None:
+    app = create_app(service=FakeService(PageState.SUCCESS))
+    client = TestClient(app)
+    response = client.post(
+        "/backtest/save",
+        data={
+            "strategy_preset": "value_quality",
+            "market_timing_overlay": "none",
+            "safe_asset_symbol": "SGOV",
+            "start_date": "2024-01-01",
+            "end_date": "2024-12-31",
+            "initial_capital": "100000",
+            "top_n": "10",
+            "transaction_cost_preset": "conservative",
+        },
+    )
+    assert response.status_code == 200
+    assert "결과 저장 완료" in response.text
+    assert "/tmp/backtest_result/20260429_120000" in response.text
+
+
+def test_post_save_invalid_form_returns_error_state() -> None:
+    app = create_app(service=FakeService(PageState.SUCCESS))
+    client = TestClient(app)
+    response = client.post(
+        "/backtest/save",
+        data={
+            "strategy_preset": "value_quality",
+            "market_timing_overlay": "none",
+            "safe_asset_symbol": "SGOV",
+            "start_date": "2024-12-31",
+            "end_date": "2024-01-01",
+            "initial_capital": "100000",
+            "top_n": "10",
+            "transaction_cost_preset": "conservative",
+        },
+    )
+    assert response.status_code == 422
+    assert "결과 저장 실패" in response.text
+    assert "입력값을 다시 확인해 주세요." in response.text
+
+
+def test_post_save_non_success_returns_failure_message() -> None:
+    app = create_app(service=FakeService(PageState.NO_DATA))
+    client = TestClient(app)
+    response = client.post(
+        "/backtest/save",
+        data={
+            "strategy_preset": "value_quality",
+            "market_timing_overlay": "none",
+            "safe_asset_symbol": "SGOV",
+            "start_date": "2024-01-01",
+            "end_date": "2024-12-31",
+            "initial_capital": "100000",
+            "top_n": "10",
+            "transaction_cost_preset": "conservative",
+        },
+    )
+    assert response.status_code == 200
+    assert "결과 저장 실패" in response.text
+    assert "결과 저장을 완료하지 못했습니다." in response.text
+
+
+def test_post_save_propagates_service_failure_status() -> None:
+    class SaveFailureService(FakeService):
+        def save_context(self, form) -> BacktestPageContext:
+            context = self.build_context(form)
+            context.save_error_message = "결과 파일 저장 중 오류가 발생했습니다. disk full"
+            context.http_status_code = 500
+            return context
+
+    app = create_app(service=SaveFailureService(PageState.SUCCESS))
+    client = TestClient(app)
+    response = client.post(
+        "/backtest/save",
+        data={
+            "strategy_preset": "value_quality",
+            "market_timing_overlay": "none",
+            "safe_asset_symbol": "SGOV",
+            "start_date": "2024-01-01",
+            "end_date": "2024-12-31",
+            "initial_capital": "100000",
+            "top_n": "10",
+            "transaction_cost_preset": "conservative",
+        },
+    )
+    assert response.status_code == 500
+    assert "결과 파일 저장 중 오류가 발생했습니다." in response.text

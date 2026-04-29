@@ -152,7 +152,11 @@ input[type="range"] {
 
 select:focus,
 input:focus,
-.primary-button:focus {
+.primary-button:focus,
+.secondary-button:focus,
+.save-button:focus,
+.disclosure-summary:focus-visible,
+.selection-details summary:focus-visible {
   outline: 3px solid rgba(47, 111, 115, 0.24);
   outline-offset: 2px;
 }
@@ -175,9 +179,81 @@ input:focus,
   cursor: pointer;
 }
 
+.secondary-button {
+  width: 100%;
+  border: 1px solid rgba(16, 32, 42, 0.12);
+  border-radius: 16px;
+  padding: 16px 18px;
+  background: rgba(255, 255, 255, 0.86);
+  color: var(--accent);
+  font-weight: 700;
+  font-size: 1rem;
+  cursor: pointer;
+}
+
 .primary-button[disabled] {
   cursor: wait;
   opacity: 0.72;
+}
+
+.secondary-button[disabled] {
+  cursor: wait;
+  opacity: 0.72;
+}
+
+.save-button[disabled] {
+  cursor: wait;
+  opacity: 0.72;
+}
+
+.form-actions {
+  display: grid;
+  gap: 12px;
+}
+
+.save-button {
+  position: relative;
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  padding: 18px 20px;
+  border: 1px solid rgba(147, 98, 54, 0.24);
+  border-radius: 20px;
+  background:
+    radial-gradient(circle at top right, rgba(255, 255, 255, 0.52), transparent 34%),
+    linear-gradient(135deg, rgba(255, 249, 242, 0.94), rgba(244, 232, 214, 0.98));
+  color: var(--ink);
+  text-align: left;
+  box-shadow: 0 14px 28px rgba(117, 62, 24, 0.12);
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.save-button::after {
+  content: "";
+  position: absolute;
+  inset: 1px;
+  border-radius: 19px;
+  border: 1px solid rgba(255, 255, 255, 0.58);
+  pointer-events: none;
+}
+
+.save-button__eyebrow {
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  font-size: 0.7rem;
+  color: var(--accent-warm);
+}
+
+.save-button__label {
+  font-size: 1.08rem;
+  font-weight: 800;
+  line-height: 1.1;
+}
+
+.save-button__meta {
+  font-size: 0.88rem;
+  color: var(--muted);
 }
 
 .loading-note {
@@ -187,18 +263,9 @@ input:focus,
 }
 
 .selection-summary {
-  display: grid;
-  gap: 14px;
   margin: 20px 0 8px;
-  padding: 18px;
-  border-radius: 20px;
   background: rgba(255, 255, 255, 0.58);
   border: 1px solid rgba(16, 32, 42, 0.08);
-}
-
-.selection-summary h3 {
-  margin: 0;
-  font-size: 1rem;
 }
 
 .selection-summary__lead,
@@ -215,6 +282,18 @@ input:focus,
 .selection-summary__stack {
   display: grid;
   gap: 10px;
+}
+
+.selection-summary h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.disclosure-summary__meta {
+  margin: 8px 0 0;
+  color: var(--accent-soft);
+  font-size: 0.86rem;
+  line-height: 1.5;
 }
 
 .selection-chip {
@@ -244,6 +323,66 @@ input:focus,
   display: grid;
   gap: 10px;
   padding-top: 12px;
+}
+
+.disclosure-card {
+  overflow: hidden;
+}
+
+.disclosure-card[open] .disclosure-pill {
+  background: rgba(16, 32, 42, 0.08);
+  color: var(--accent);
+}
+
+.disclosure-card:not([open]) .disclosure-pill {
+  color: var(--accent-soft);
+}
+
+.disclosure-card:not([open]) .disclosure-pill::before {
+  content: "펼치기";
+}
+
+.disclosure-card[open] .disclosure-pill::before {
+  content: "접기";
+}
+
+.disclosure-summary {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 16px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.disclosure-summary::-webkit-details-marker {
+  display: none;
+}
+
+.disclosure-summary--compact {
+  padding: 18px;
+}
+
+.disclosure-body {
+  display: grid;
+  gap: 14px;
+  padding: 0 18px 18px;
+}
+
+.disclosure-pill {
+  flex-shrink: 0;
+  min-width: 72px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.76);
+  border: 1px solid rgba(16, 32, 42, 0.08);
+  font-size: 0.82rem;
+  font-weight: 700;
+  text-align: center;
+}
+
+.panel-header--tight {
+  margin-bottom: 0;
 }
 
 .stacked-alerts {
@@ -276,6 +415,10 @@ input:focus,
 
 .alert--info {
   background: rgba(220, 238, 242, 0.56);
+}
+
+.alert--success {
+  background: rgba(225, 242, 228, 0.72);
 }
 
 .alert--danger {
@@ -494,6 +637,14 @@ th {
   .hero-card {
     flex-direction: column;
     align-items: start;
+  }
+
+  .disclosure-summary {
+    flex-direction: column;
+  }
+
+  .disclosure-pill {
+    min-width: 0;
   }
 }
 

@@ -1,5 +1,19 @@
-{% if warnings or data_quality_flags or error_message %}
+{% if save_success_message or save_error_message or warnings or data_quality_flags or error_message %}
   <section class="stacked-alerts">
+    {% if save_success_message %}
+      <article class="alert alert--success">
+        <strong>결과 저장 완료</strong>
+        <p>{{ save_success_message }}</p>
+      </article>
+    {% endif %}
+
+    {% if save_error_message %}
+      <article class="alert alert--danger">
+        <strong>결과 저장 실패</strong>
+        <p>{{ save_error_message }}</p>
+      </article>
+    {% endif %}
+
     {% if error_message and state == "error" %}
       <article class="alert alert--danger">
         <strong>실행 전 확인이 필요합니다</strong>

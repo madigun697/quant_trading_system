@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import OrderedDict, defaultdict
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from html import escape
 from typing import Any
@@ -37,6 +37,7 @@ from quant_data_platform.web.schemas import (
     WarningMessage,
     form_values_from_model,
 )
+from quant_data_platform.web.services.backtest_result_writer import BacktestResultWriter, DEFAULT_BACKTEST_RESULT_DIR
 from quant_data_platform.web.services.engine import (
     SimulationResult,
     execution_schedule,
@@ -154,9 +155,14 @@ class SimpleLruCache:
 
 
 class BacktestPageService:
-    def __init__(self, repository: BacktestRepository) -> None:
+    def __init__(
+        self,
+        repository: BacktestRepository,
+        result_writer: BacktestResultWriter | None = None,
+    ) -> None:
         self.repository = repository
         self._cache = SimpleLruCache()
+        self.result_writer = result_writer or BacktestResultWriter(DEFAULT_BACKTEST_RESULT_DIR)
 
     def readiness_status(self) -> ReadinessStatus:
         return self.repository.check_readiness(StrategyPresetId.VALUE_QUALITY)
@@ -233,43 +239,80 @@ class BacktestPageService:
             cached = self._cache.get(cache_key)
             if cached is not None:
                 return cached
-
-            calendar_start = form.start_date
-            calendar_end = form.end_date + timedelta(days=7)
-            spy_calendar = self.repository.fetch_spy_calendar(calendar_start, calendar_end)
-            signal_dates = month_end_signal_dates(spy_calendar, form.start_date, form.end_date)
-            factor_rows = self.repository.fetch_factor_rows(form.strategy_preset, signal_dates)
-            monthly_execution_dates = [
-                spy_calendar[index + 1]
-                for index, current_date in enumerate(spy_calendar[:-1])
-                if current_date in signal_dates and spy_calendar[index + 1] <= form.end_date
-            ]
-            all_factor_symbols = sorted({row.symbol for row in factor_rows} | {"SPY"})
-            monthly_execution_price_rows = self.repository.fetch_execution_prices(all_factor_symbols, monthly_execution_dates)
-            earliest_available = self.repository.fetch_earliest_available_trade_date(form.strategy_preset)
-            selected_symbols = self._selected_symbols_for_daily_closes(form, spy_calendar, factor_rows, monthly_execution_price_rows)
-            support_symbols = sorted(set(selected_symbols) | {"SPY", "VT", "IEF", form.safe_asset_symbol.value})
-            calendar_trade_dates = [calendar_date for calendar_date in spy_calendar if form.start_date <= calendar_date <= form.end_date]
-            support_execution_price_rows = self.repository.fetch_execution_prices(support_symbols, calendar_trade_dates)
-            execution_price_rows = self._merge_execution_rows(monthly_execution_price_rows, support_execution_price_rows)
-            price_buffer_start = self._price_buffer_start(form)
-            daily_close_rows = self.repository.fetch_daily_closes(support_symbols, price_buffer_start, form.end_date)
-            benchmark_rows = self.repository.fetch_spy_benchmark_values(form.start_date, form.end_date)
-            simulation = simulate_backtest(
-                input_data=form,
-                calendar_dates=spy_calendar,
-                factor_rows=factor_rows,
-                execution_price_rows=execution_price_rows,
-                daily_close_rows=daily_close_rows,
-                benchmark_rows=benchmark_rows,
-                earliest_available_trade_date=earliest_available,
-                transaction_cost_rate=Decimal(str(TRANSACTION_COST_BPS[form.transaction_cost_preset])),
-            )
+            simulation = self._run_simulation(form)
         except psycopg.Error as exc:
             return self._dependency_error_context(form, self.repository.classify_error(exc, form.strategy_preset))
         context = self._context_from_simulation(form, simulation)
         self._cache.set(cache_key, context)
         return context
+
+    def save_context(self, form: BacktestFormInput, saved_at: datetime | None = None) -> BacktestPageContext:
+        readiness = self.repository.check_readiness(form.strategy_preset)
+        if not readiness.ok:
+            context = self._dependency_error_context(form, readiness)
+            context.save_error_message = "저장용 백테스트를 다시 실행하지 못했습니다."
+            return context
+        try:
+            simulation = self._run_simulation(form)
+        except psycopg.Error as exc:
+            context = self._dependency_error_context(form, self.repository.classify_error(exc, form.strategy_preset))
+            context.save_error_message = "저장용 백테스트를 다시 실행하지 못했습니다."
+            return context
+
+        context = self._context_from_simulation(form, simulation)
+        if simulation.state != PageState.SUCCESS:
+            reason = simulation.error_message or "현재 조건에서는 저장 가능한 결과를 만들지 못했습니다."
+            context.save_error_message = f"결과 저장을 완료하지 못했습니다. {reason}"
+            return context
+
+        try:
+            saved_directory = self.result_writer.write(
+                form=form,
+                context=context,
+                simulation=simulation,
+                saved_at=saved_at,
+            )
+        except OSError as exc:
+            context.save_error_message = f"결과 파일 저장 중 오류가 발생했습니다. {exc}"
+            context.http_status_code = 500
+            return context
+
+        context.save_directory = str(saved_directory)
+        context.save_success_message = f"백테스트 결과를 저장했습니다: {saved_directory}"
+        return context
+
+    def _run_simulation(self, form: BacktestFormInput) -> SimulationResult:
+        calendar_start = form.start_date
+        calendar_end = form.end_date + timedelta(days=7)
+        spy_calendar = self.repository.fetch_spy_calendar(calendar_start, calendar_end)
+        signal_dates = month_end_signal_dates(spy_calendar, form.start_date, form.end_date)
+        factor_rows = self.repository.fetch_factor_rows(form.strategy_preset, signal_dates)
+        monthly_execution_dates = [
+            spy_calendar[index + 1]
+            for index, current_date in enumerate(spy_calendar[:-1])
+            if current_date in signal_dates and spy_calendar[index + 1] <= form.end_date
+        ]
+        all_factor_symbols = sorted({row.symbol for row in factor_rows} | {"SPY"})
+        monthly_execution_price_rows = self.repository.fetch_execution_prices(all_factor_symbols, monthly_execution_dates)
+        earliest_available = self.repository.fetch_earliest_available_trade_date(form.strategy_preset)
+        selected_symbols = self._selected_symbols_for_daily_closes(form, spy_calendar, factor_rows, monthly_execution_price_rows)
+        support_symbols = sorted(set(selected_symbols) | {"SPY", "VT", "IEF", form.safe_asset_symbol.value})
+        calendar_trade_dates = [calendar_date for calendar_date in spy_calendar if form.start_date <= calendar_date <= form.end_date]
+        support_execution_price_rows = self.repository.fetch_execution_prices(support_symbols, calendar_trade_dates)
+        execution_price_rows = self._merge_execution_rows(monthly_execution_price_rows, support_execution_price_rows)
+        price_buffer_start = self._price_buffer_start(form)
+        daily_close_rows = self.repository.fetch_daily_closes(support_symbols, price_buffer_start, form.end_date)
+        benchmark_rows = self.repository.fetch_spy_benchmark_values(form.start_date, form.end_date)
+        return simulate_backtest(
+            input_data=form,
+            calendar_dates=spy_calendar,
+            factor_rows=factor_rows,
+            execution_price_rows=execution_price_rows,
+            daily_close_rows=daily_close_rows,
+            benchmark_rows=benchmark_rows,
+            earliest_available_trade_date=earliest_available,
+            transaction_cost_rate=Decimal(str(TRANSACTION_COST_BPS[form.transaction_cost_preset])),
+        )
 
     def _merge_execution_rows(self, *groups: list[Any]) -> list[Any]:
         merged: dict[tuple[str, date], Any] = {}

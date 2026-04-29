@@ -25,3 +25,4 @@ dbt/.user.yml
 
 # Local data volumes
 .data/
+backtest_result/

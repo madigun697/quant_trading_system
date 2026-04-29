@@ -50,6 +50,7 @@ function setupSelectionSummary(form) {
   const overlaySelect = form.querySelector("[data-overlay-select]");
   const safeAssetSelect = form.querySelector("[data-safe-asset-select]");
   const costSelect = form.querySelector("[data-cost-select]");
+  const topNSelect = form.querySelector('select[name="top_n"]');
   const presetHelp = form.querySelector("[data-preset-help]");
   const overlayHelp = form.querySelector("[data-overlay-help]");
   const safeAssetHelp = form.querySelector("[data-safe-asset-help]");
@@ -63,6 +64,7 @@ function setupSelectionSummary(form) {
   const costSummary = form.querySelector("[data-selection-cost]");
   const rationaleDetail = form.querySelector("[data-selection-rationale-detail]");
   const overlayRationale = form.querySelector("[data-selection-overlay-rationale]");
+  const summaryMeta = form.querySelector("[data-selection-summary-meta]");
   const higher = form.querySelector("[data-selection-higher]");
   const lower = form.querySelector("[data-selection-lower]");
   const lookback = form.querySelector("[data-selection-lookback]");
@@ -116,6 +118,15 @@ function setupSelectionSummary(form) {
     if (overlayRationale instanceof HTMLElement) {
       overlayRationale.textContent = overlay?.rationale || "";
     }
+    if (summaryMeta instanceof HTMLElement) {
+      const parts = [
+        preset?.label || presetSelect?.value || "",
+        overlay?.label || overlaySelect?.value || "",
+        `Top ${topNSelect instanceof HTMLSelectElement ? topNSelect.value : ""}`,
+        cost?.label || costSelect?.value || "",
+      ].filter(Boolean);
+      summaryMeta.textContent = parts.join(" · ");
+    }
     if (higher instanceof HTMLElement) {
       higher.textContent = joinOrFallback(preset?.higher_is_better);
     }
@@ -146,6 +157,7 @@ function setupSelectionSummary(form) {
   overlaySelect?.addEventListener("change", sync);
   safeAssetSelect?.addEventListener("change", sync);
   costSelect?.addEventListener("change", sync);
+  topNSelect?.addEventListener("change", sync);
   sync();
 }
 
@@ -281,14 +293,21 @@ document.addEventListener("DOMContentLoaded", () => {
   if (form instanceof HTMLFormElement) {
     setupSelectionSummary(form);
 
-    const button = form.querySelector("[data-submit-button]");
+    const buttons = form.querySelectorAll("[data-submit-button]");
     const loadingNote = form.querySelector("[data-loading-note]");
-    form.addEventListener("submit", () => {
-      if (button instanceof HTMLButtonElement) {
-        button.disabled = true;
-        button.textContent = "계산 중...";
+    form.addEventListener("submit", (event) => {
+      buttons.forEach((button) => {
+        if (button instanceof HTMLButtonElement) {
+          button.disabled = true;
+        }
+      });
+      if (event.submitter instanceof HTMLButtonElement) {
+        event.submitter.textContent = event.submitter.dataset.loadingLabel || "처리 중...";
       }
       if (loadingNote instanceof HTMLElement) {
+        loadingNote.textContent = event.submitter instanceof HTMLButtonElement && event.submitter.dataset.submitKind === "save"
+          ? "현재 입력 조건으로 백테스트를 다시 실행하고 결과 파일을 저장하는 중입니다..."
+          : "전략 후보와 체결 가격을 계산하는 중입니다...";
         loadingNote.hidden = false;
       }
     });

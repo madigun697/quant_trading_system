@@ -59,4 +59,25 @@ def build_router(
         context = service.build_context(form)
         return templates.TemplateResponse(request, "backtest/index.html", context.model_dump(), status_code=context.http_status_code)
 
+    @router.post("/backtest/save", response_class=HTMLResponse)
+    async def save_backtest(request: Request) -> HTMLResponse:
+        service = service_factory(request)
+        raw_form = {key: value for key, value in (await request.form()).multi_items()}
+        try:
+            form = BacktestFormInput.model_validate(raw_form)
+        except ValidationError as exc:
+            raw_values = form_values_from_raw(raw_form)
+            context = service.error_context(
+                form=None,
+                message="입력값을 다시 확인해 주세요.",
+                field_errors=field_errors_from_validation_error(exc),
+                http_status_code=422,
+                form_values=raw_values,
+            )
+            context.save_error_message = "결과 저장 요청을 처리하지 못했습니다. 입력값을 다시 확인해 주세요."
+            return templates.TemplateResponse(request, "backtest/index.html", context.model_dump(), status_code=422)
+
+        context = service.save_context(form)
+        return templates.TemplateResponse(request, "backtest/index.html", context.model_dump(), status_code=context.http_status_code)
+
     return router

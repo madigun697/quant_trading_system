@@ -172,6 +172,9 @@ class BacktestPageContext(BaseModel):
     field_errors: dict[str, str] = Field(default_factory=dict)
     benchmark_available: bool = False
     equity_curve_svg: str | None = None
+    save_success_message: str | None = None
+    save_error_message: str | None = None
+    save_directory: str | None = None
     page_title: str = "프리셋 백테스트"
     helper_copy: str = "팩터 전략에 마켓타이밍 오버레이를 결합해 월말 리밸런스와 일일 risk-off 방어를 함께 점검할 수 있습니다."
     http_status_code: int = 200
