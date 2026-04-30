@@ -1,0 +1,142 @@
+{% extends "base.html" %}
+
+{% block content %}
+  <main class="backtest-page">
+    <section class="hero-card">
+      <div class="hero-copy">
+        <p class="eyebrow">Current Investable Bucket</p>
+        <h1>지금 바로 주문 가능한 현재 시점 버킷</h1>
+        <p class="hero-description">{{ helper_copy }}</p>
+      </div>
+      <div class="hero-rule">
+        <span>산출 규칙</span>
+        <strong>현시점 종가 · 최신 월말 신호</strong>
+      </div>
+    </section>
+
+    <section class="workspace-grid">
+      <aside class="control-panel">
+        {% include "current_bucket/_form.html" %}
+      </aside>
+
+      <section class="result-panel" aria-live="polite">
+        {% include "backtest/_alerts.html" %}
+
+        {% if state == "empty" %}
+          <section class="empty-state panel-card">
+            <h2>먼저 현재 버킷을 계산해 보세요</h2>
+            <p>전략, 오버레이, 안전자산 비중, 자본, 보유 종목 수만 정하면 최신 기준 종가로 목표 수량을 바로 확인할 수 있습니다.</p>
+          </section>
+        {% elif state in ["error", "no_data", "insufficient_history"] %}
+          <section class="status-state panel-card">
+            <h2>
+              {% if state == "error" %}실행 전에 확인해야 할 조건이 있습니다{% endif %}
+              {% if state == "no_data" %}이번 조건에서는 현재 버킷을 만들지 못했습니다{% endif %}
+              {% if state == "insufficient_history" %}현재 시점 계산에 필요한 과거 이력이 부족합니다{% endif %}
+            </h2>
+            <p>{{ error_message }}</p>
+
+            {% if unavailable_reasons %}
+              <div class="reason-grid">
+                {% for reason in unavailable_reasons %}
+                  <article class="reason-card">
+                    <strong>{{ reason.title }}</strong>
+                    <p>{{ reason.detail }}</p>
+                    {% if reason.facts %}
+                      <ul class="reason-list">
+                        {% for fact in reason.facts %}
+                          <li>{{ fact }}</li>
+                        {% endfor %}
+                      </ul>
+                    {% endif %}
+                    {% if reason.suggestions %}
+                      <p class="reason-next">다음 시도</p>
+                      <ul class="reason-list">
+                        {% for suggestion in reason.suggestions %}
+                          <li>{{ suggestion }}</li>
+                        {% endfor %}
+                      </ul>
+                    {% endif %}
+                  </article>
+                {% endfor %}
+              </div>
+            {% endif %}
+          </section>
+        {% else %}
+          <section class="panel-card summary-grid">
+            <article class="summary-card">
+              <span class="kpi-label">기준일</span>
+              <strong>{{ as_of_date }}</strong>
+              <p>{{ price_basis_label }}</p>
+            </article>
+            <article class="summary-card">
+              <span class="kpi-label">시그널 날짜</span>
+              <strong>{{ signal_date }}</strong>
+              <p>최신 월말 스냅샷</p>
+            </article>
+            <article class="summary-card">
+              <span class="kpi-label">현재 상태</span>
+              <strong class="state-pill state-pill--{{ active_risk_state }}">{{ active_risk_state.replace('_', '-').upper() if active_risk_state else '-' }}</strong>
+              <p>오버레이 기준 상태</p>
+            </article>
+            <article class="summary-card">
+              <span class="kpi-label">실제 안전자산</span>
+              <strong>{{ safe_asset_summary }}</strong>
+              <p>risk-off 시 실제 투자 바스켓</p>
+            </article>
+          </section>
+
+          {% if risk_off_notice %}
+            <section class="panel-card status-state status-state--warning">
+              <h2>현재는 안전자산 구간입니다</h2>
+              <p>{{ risk_off_notice }}</p>
+            </section>
+          {% endif %}
+
+          <section class="panel-card">
+            <div class="panel-header panel-header--tight">
+              <h2>주식 후보 버킷</h2>
+              <p>아래 표는 최신 월말 신호 기준의 주식 후보와 현재 종가 기준 목표 수량입니다.</p>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Symbol</th>
+                    <th>목표 비중</th>
+                    <th>기준 종가</th>
+                    <th>목표 금액</th>
+                    <th>목표 주수</th>
+                    <th>실제 금액</th>
+                    <th>실제 비중</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for row in stock_bucket_rows %}
+                    <tr>
+                      <td><strong>{{ row.symbol }}</strong></td>
+                      <td>{{ row.target_weight }}</td>
+                      <td>{{ row.reference_close }}</td>
+                      <td>{{ row.target_notional }}</td>
+                      <td>{{ row.target_shares }}</td>
+                      <td>{{ row.actual_notional }}</td>
+                      <td>{{ row.actual_weight }}</td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="panel-card summary-grid summary-grid--compact">
+            <article class="summary-card">
+              <span class="kpi-label">잔여 현금</span>
+              <strong>{{ cash_remainder }}</strong>
+              <p>정수 주수 내림으로 남는 금액</p>
+            </article>
+          </section>
+        {% endif %}
+      </section>
+    </section>
+  </main>
+{% endblock %}

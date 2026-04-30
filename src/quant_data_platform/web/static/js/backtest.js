@@ -28,6 +28,14 @@ function formatCurrency(value) {
   return CURRENCY.format(value);
 }
 
+function formatPercentNumber(value) {
+  if (typeof value !== "number" || Number.isNaN(value)) {
+    return "0";
+  }
+  const rounded = Math.round(value * 10) / 10;
+  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
+}
+
 function joinOrFallback(items) {
   return Array.isArray(items) && items.length ? items.join(", ") : "해당 없음";
 }
@@ -43,17 +51,18 @@ function setupSelectionSummary(form) {
   const costs = readJsonScript(costScript) || [];
   const presetById = new Map(presets.map((option) => [option.id, option]));
   const overlayById = new Map(overlays.map((option) => [option.id, option]));
-  const safeAssetById = new Map(safeAssets.map((option) => [option.id, option]));
+  const safeAssetByField = new Map(safeAssets.map((option) => [option.weight_field, option]));
   const costById = new Map(costs.map((option) => [option.id, option]));
 
   const presetSelect = form.querySelector("[data-preset-select]");
   const overlaySelect = form.querySelector("[data-overlay-select]");
-  const safeAssetSelect = form.querySelector("[data-safe-asset-select]");
+  const safeAssetInputs = Array.from(form.querySelectorAll("[data-safe-asset-weight-input]"));
   const costSelect = form.querySelector("[data-cost-select]");
   const topNSelect = form.querySelector('select[name="top_n"]');
   const presetHelp = form.querySelector("[data-preset-help]");
   const overlayHelp = form.querySelector("[data-overlay-help]");
   const safeAssetHelp = form.querySelector("[data-safe-asset-help]");
+  const safeAssetTotal = form.querySelector("[data-safe-asset-total]");
   const costHelp = form.querySelector("[data-cost-help]");
   const rationale = form.querySelector("[data-selection-rationale]");
   const description = form.querySelector("[data-selection-description]");
@@ -77,8 +86,27 @@ function setupSelectionSummary(form) {
   const sync = () => {
     const preset = presetById.get(presetSelect?.value || "");
     const overlay = overlayById.get(overlaySelect?.value || "");
-    const safeAsset = safeAssetById.get(safeAssetSelect?.value || "");
     const cost = costById.get(costSelect?.value || "");
+    const selectedSafeAssets = safeAssetInputs
+      .map((input) => {
+        const option = safeAssetByField.get(input.getAttribute("data-safe-asset-weight-field") || "");
+        const numericValue = Number.parseFloat(input.value || "0");
+        return {
+          option,
+          numericValue: Number.isFinite(numericValue) ? numericValue : 0,
+        };
+      })
+      .filter((item) => item.option && item.numericValue > 0);
+    const safeAssetSummaryText = selectedSafeAssets.length
+      ? selectedSafeAssets.map((item) => `${item.option.label} ${formatPercentNumber(item.numericValue)}%`).join(" / ")
+      : "안전자산 비중을 입력해 주세요.";
+    const safeAssetDetailText = selectedSafeAssets.length
+      ? selectedSafeAssets.map((item) => `${item.option.label} ${formatPercentNumber(item.numericValue)}% · ${item.option.details}`).join(" / ")
+      : "";
+    const totalWeight = safeAssetInputs.reduce((sum, input) => {
+      const numericValue = Number.parseFloat(input.value || "0");
+      return sum + (Number.isFinite(numericValue) ? numericValue : 0);
+    }, 0);
     if (presetHelp instanceof HTMLElement) {
       presetHelp.textContent = preset ? `${preset.description} · ${preset.lookback_label}` : "";
     }
@@ -86,7 +114,10 @@ function setupSelectionSummary(form) {
       overlayHelp.textContent = overlay ? `${overlay.description} · ${overlay.lookback_label}` : "";
     }
     if (safeAssetHelp instanceof HTMLElement) {
-      safeAssetHelp.textContent = safeAsset ? `${safeAsset.description} · ${safeAsset.details}` : "";
+      safeAssetHelp.textContent = selectedSafeAssets.length ? `현재 바스켓: ${safeAssetSummaryText}` : "합계 100%로 입력해 주세요.";
+    }
+    if (safeAssetTotal instanceof HTMLElement) {
+      safeAssetTotal.textContent = `${formatPercentNumber(totalWeight)}%`;
     }
     if (costHelp instanceof HTMLElement) {
       costHelp.textContent = cost ? `${cost.description} · ${cost.details}` : "";
@@ -107,7 +138,7 @@ function setupSelectionSummary(form) {
       overlayExecution.textContent = Array.isArray(overlay?.execution_notes) ? overlay.execution_notes.join(" / ") : "";
     }
     if (safeAssetSummary instanceof HTMLElement) {
-      safeAssetSummary.textContent = safeAsset ? `${safeAsset.description} · ${safeAsset.details}` : "";
+      safeAssetSummary.textContent = safeAssetSummaryText;
     }
     if (costSummary instanceof HTMLElement) {
       costSummary.textContent = cost ? `${cost.description} · ${cost.details}` : "";
@@ -149,13 +180,13 @@ function setupSelectionSummary(form) {
       overlayRisk.textContent = Array.isArray(overlay?.risk_notes) && overlay.risk_notes.length ? overlay.risk_notes.join(" / ") : "해당 없음";
     }
     if (safeAssetDetail instanceof HTMLElement) {
-      safeAssetDetail.textContent = safeAsset ? `${safeAsset.label} · ${safeAsset.details}` : "";
+      safeAssetDetail.textContent = safeAssetDetailText;
     }
   };
 
   presetSelect?.addEventListener("change", sync);
   overlaySelect?.addEventListener("change", sync);
-  safeAssetSelect?.addEventListener("change", sync);
+  safeAssetInputs.forEach((input) => input.addEventListener("input", sync));
   costSelect?.addEventListener("change", sync);
   topNSelect?.addEventListener("change", sync);
   sync();
@@ -305,9 +336,11 @@ document.addEventListener("DOMContentLoaded", () => {
         event.submitter.textContent = event.submitter.dataset.loadingLabel || "처리 중...";
       }
       if (loadingNote instanceof HTMLElement) {
+        const defaultRunNote = loadingNote.dataset.runLoadingNote || "전략 후보와 체결 가격을 계산하는 중입니다...";
+        const defaultSaveNote = loadingNote.dataset.saveLoadingNote || "현재 입력 조건으로 백테스트를 다시 실행하고 결과 파일을 저장하는 중입니다...";
         loadingNote.textContent = event.submitter instanceof HTMLButtonElement && event.submitter.dataset.submitKind === "save"
-          ? "현재 입력 조건으로 백테스트를 다시 실행하고 결과 파일을 저장하는 중입니다..."
-          : "전략 후보와 체결 가격을 계산하는 중입니다...";
+          ? defaultSaveNote
+          : defaultRunNote;
         loadingNote.hidden = false;
       }
     });

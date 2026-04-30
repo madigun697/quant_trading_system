@@ -3,13 +3,17 @@ from __future__ import annotations
 from datetime import date, timedelta
 from decimal import Decimal
 
-from quant_data_platform.web.presets import MarketTimingOverlayId, SafeAssetSymbol, StrategyPresetId, TransactionCostPreset, get_strategy_preset
+import pytest
+
+from quant_data_platform.web.presets import MarketTimingOverlayId, StrategyPresetId, TransactionCostPreset, get_strategy_preset
 from quant_data_platform.web.repositories.backtest_repo import BenchmarkValueRow, DailyCloseRow, ExecutionPriceRow, FactorSnapshotRow
 from quant_data_platform.web.schemas import BacktestFormInput, PageState
 from quant_data_platform.web.services.engine import (
     execution_schedule,
+    evaluate_daily_overlay_signal,
     month_end_signal_dates,
     select_top_candidates,
+    select_top_candidates_by_close,
     simulate_backtest,
 )
 
@@ -18,7 +22,11 @@ def make_form(**overrides) -> BacktestFormInput:
     payload = {
         "strategy_preset": StrategyPresetId.VALUE_QUALITY,
         "market_timing_overlay": MarketTimingOverlayId.NONE,
-        "safe_asset_symbol": SafeAssetSymbol.SGOV,
+        "safe_asset_weight_sgov": Decimal("100"),
+        "safe_asset_weight_jpst": Decimal("0"),
+        "safe_asset_weight_ief": Decimal("0"),
+        "safe_asset_weight_tlt": Decimal("0"),
+        "safe_asset_weight_gld": Decimal("0"),
         "start_date": date(2024, 1, 1),
         "end_date": date(2024, 3, 1),
         "initial_capital": Decimal("1000"),
@@ -73,6 +81,39 @@ def test_select_top_candidates_uses_liquidity_then_symbol_as_tie_breaker() -> No
     )
     assert excluded == {"missing_factors": 0, "missing_execution_open": 0}
     assert [row.symbol for row in selected] == ["AAA"]
+
+
+def test_select_top_candidates_by_close_uses_close_availability_after_ranking() -> None:
+    preset = get_strategy_preset(StrategyPresetId.VALUE_QUALITY)
+    rows = [
+        FactorSnapshotRow("AAA", date(2024, 1, 31), 1, {factor.column: Decimal("2") for factor in preset.factor_specs}),
+        FactorSnapshotRow("BBB", date(2024, 1, 31), 2, {factor.column: Decimal("1") for factor in preset.factor_specs}),
+    ]
+    selected, excluded = select_top_candidates_by_close(
+        rows,
+        preset,
+        1,
+        {("AAA", date(2024, 1, 31)): None, ("BBB", date(2024, 1, 31)): Decimal("20")},
+        date(2024, 1, 31),
+    )
+    assert excluded == {"missing_factors": 0, "missing_reference_close": 1}
+    assert [row.symbol for row in selected] == ["BBB"]
+
+
+def test_evaluate_daily_overlay_signal_can_return_risk_off() -> None:
+    rows = [
+        DailyCloseRow("SPY", date(2024, 1, 1) + timedelta(days=index), Decimal("100"))
+        for index in range(50)
+    ]
+    rows.append(DailyCloseRow("SPY", date(2024, 2, 20), Decimal("80")))
+
+    signal = evaluate_daily_overlay_signal(
+        MarketTimingOverlayId.EMERGENCY_BRAKE_ASYMMETRIC,
+        date(2024, 2, 20),
+        rows,
+    )
+
+    assert signal.risk_on is False
 
 
 def test_simulate_backtest_runs_buy_sell_sequence_and_costs() -> None:
@@ -299,7 +340,6 @@ def test_simulate_backtest_daily_emergency_brake_moves_to_selected_safe_asset() 
     preset = get_strategy_preset(StrategyPresetId.VALUE_QUALITY)
     form = make_form(
         market_timing_overlay=MarketTimingOverlayId.EMERGENCY_BRAKE_ASYMMETRIC,
-        safe_asset_symbol=SafeAssetSymbol.SGOV,
         start_date=date(2024, 1, 31),
         end_date=date(2024, 2, 5),
     )
@@ -346,7 +386,7 @@ def test_simulate_backtest_daily_emergency_brake_moves_to_selected_safe_asset() 
         transaction_cost_rate=Decimal("0.005"),
     )
     assert result.state == PageState.SUCCESS
-    assert any(row.notes == "daily risk_off: factor basket -> SGOV" for row in result.summary_rows)
+    assert any(row.notes == "daily risk_off: factor basket -> SGOV 100%" for row in result.summary_rows)
     assert [row.symbol for row in result.fill_rows if row.execution_date == date(2024, 2, 5) and row.action == "BUY"] == ["SGOV"]
 
 
@@ -354,7 +394,6 @@ def test_simulate_backtest_waits_until_month_end_before_reentering_factor_basket
     preset = get_strategy_preset(StrategyPresetId.VALUE_QUALITY)
     form = make_form(
         market_timing_overlay=MarketTimingOverlayId.EMERGENCY_BRAKE_ASYMMETRIC,
-        safe_asset_symbol=SafeAssetSymbol.SGOV,
         start_date=date(2024, 1, 31),
         end_date=date(2024, 3, 1),
     )
@@ -414,8 +453,8 @@ def test_simulate_backtest_waits_until_month_end_before_reentering_factor_basket
         transaction_cost_rate=Decimal("0.005"),
     )
     assert result.state == PageState.SUCCESS
-    assert any(row.notes == "daily risk_off: factor basket -> SGOV" for row in result.summary_rows)
-    assert any(row.notes == "month-end risk_on: SGOV -> factor basket" for row in result.summary_rows)
+    assert any(row.notes == "daily risk_off: factor basket -> SGOV 100%" for row in result.summary_rows)
+    assert any(row.notes == "month-end risk_on: SGOV 100% -> factor basket" for row in result.summary_rows)
     march_buys = [row.symbol for row in result.fill_rows if row.execution_date == date(2024, 3, 1) and row.action == "BUY"]
     assert march_buys == ["BBB"]
 
@@ -424,7 +463,8 @@ def test_simulate_backtest_canary_signal_uses_ief_but_parks_in_jpst() -> None:
     preset = get_strategy_preset(StrategyPresetId.VALUE_QUALITY)
     form = make_form(
         market_timing_overlay=MarketTimingOverlayId.CANARY_ASSET_SIGNAL,
-        safe_asset_symbol=SafeAssetSymbol.JPST,
+        safe_asset_weight_sgov=Decimal("0"),
+        safe_asset_weight_jpst=Decimal("100"),
         start_date=date(2024, 1, 31),
         end_date=date(2024, 2, 5),
     )
@@ -480,15 +520,78 @@ def test_simulate_backtest_canary_signal_uses_ief_but_parks_in_jpst() -> None:
         transaction_cost_rate=Decimal("0.005"),
     )
     assert result.state == PageState.SUCCESS
-    assert any(row.notes == "daily risk_off: factor basket -> JPST" for row in result.summary_rows)
+    assert any(row.notes == "daily risk_off: factor basket -> JPST 100%" for row in result.summary_rows)
     assert [row.symbol for row in result.fill_rows if row.execution_date == date(2024, 2, 5) and row.action == "BUY"] == ["JPST"]
 
 
-def test_simulate_backtest_keeps_factor_state_when_safe_asset_open_is_missing() -> None:
+def test_simulate_backtest_daily_risk_off_respects_safe_asset_weights() -> None:
     preset = get_strategy_preset(StrategyPresetId.VALUE_QUALITY)
     form = make_form(
         market_timing_overlay=MarketTimingOverlayId.EMERGENCY_BRAKE_ASYMMETRIC,
-        safe_asset_symbol=SafeAssetSymbol.SGOV,
+        safe_asset_weight_sgov=Decimal("60"),
+        safe_asset_weight_ief=Decimal("40"),
+        start_date=date(2024, 1, 31),
+        end_date=date(2024, 2, 5),
+    )
+    calendar = [date(2024, 1, 31), date(2024, 2, 1), date(2024, 2, 2), date(2024, 2, 5)]
+    strong = {factor.column: Decimal("2") for factor in preset.factor_specs}
+    factor_rows = [FactorSnapshotRow("AAA", date(2024, 1, 31), 1, strong)]
+    execution_rows = [
+        ExecutionPriceRow("AAA", date(2024, 2, 1), Decimal("10")),
+        ExecutionPriceRow("AAA", date(2024, 2, 5), Decimal("10")),
+        ExecutionPriceRow("IEF", date(2024, 2, 5), Decimal("100")),
+        ExecutionPriceRow("SGOV", date(2024, 2, 5), Decimal("100")),
+        ExecutionPriceRow("SPY", date(2024, 2, 1), Decimal("100")),
+        ExecutionPriceRow("SPY", date(2024, 2, 5), Decimal("95")),
+    ]
+    daily_rows = [
+        DailyCloseRow("AAA", date(2024, 2, 1), Decimal("10")),
+        DailyCloseRow("AAA", date(2024, 2, 2), Decimal("10")),
+        DailyCloseRow("AAA", date(2024, 2, 5), Decimal("10")),
+        DailyCloseRow("IEF", date(2024, 2, 5), Decimal("100")),
+        DailyCloseRow("SGOV", date(2024, 2, 5), Decimal("100")),
+    ]
+    for offset in range(90):
+        trade_date = date(2023, 11, 15) + timedelta(days=offset)
+        if trade_date.weekday() < 5:
+            daily_rows.append(DailyCloseRow("SPY", trade_date, Decimal("100")))
+    daily_rows.extend(
+        [
+            DailyCloseRow("SPY", date(2024, 1, 31), Decimal("110")),
+            DailyCloseRow("SPY", date(2024, 2, 1), Decimal("101")),
+            DailyCloseRow("SPY", date(2024, 2, 2), Decimal("90")),
+            DailyCloseRow("SPY", date(2024, 2, 5), Decimal("89")),
+        ]
+    )
+    result = simulate_backtest(
+        input_data=form,
+        calendar_dates=calendar,
+        factor_rows=factor_rows,
+        execution_price_rows=execution_rows,
+        daily_close_rows=daily_rows,
+        benchmark_rows=[
+            BenchmarkValueRow(date(2024, 2, 1), Decimal("100")),
+            BenchmarkValueRow(date(2024, 2, 2), Decimal("90")),
+            BenchmarkValueRow(date(2024, 2, 5), Decimal("89")),
+        ],
+        earliest_available_trade_date=date(2024, 1, 31),
+        transaction_cost_rate=Decimal("0.005"),
+    )
+    assert result.state == PageState.SUCCESS
+    assert any(row.notes == "daily risk_off: factor basket -> SGOV 60% / IEF 40%" for row in result.summary_rows)
+    buy_rows = [row for row in result.fill_rows if row.execution_date == date(2024, 2, 5) and row.action == "BUY"]
+    assert [row.symbol for row in buy_rows] == ["IEF", "SGOV"]
+    buy_notionals = {row.symbol: row.shares * row.execution_price for row in buy_rows}
+    total_buy = sum(buy_notionals.values(), start=Decimal("0"))
+    assert total_buy > 0
+    assert float(buy_notionals["IEF"] / total_buy) == pytest.approx(0.4, abs=1e-6)
+    assert float(buy_notionals["SGOV"] / total_buy) == pytest.approx(0.6, abs=1e-6)
+
+
+def test_simulate_backtest_returns_error_when_safe_asset_open_is_missing_on_risk_off_entry() -> None:
+    preset = get_strategy_preset(StrategyPresetId.VALUE_QUALITY)
+    form = make_form(
+        market_timing_overlay=MarketTimingOverlayId.EMERGENCY_BRAKE_ASYMMETRIC,
         start_date=date(2024, 1, 31),
         end_date=date(2024, 3, 1),
     )
@@ -547,7 +650,5 @@ def test_simulate_backtest_keeps_factor_state_when_safe_asset_open_is_missing() 
         earliest_available_trade_date=date(2024, 1, 31),
         transaction_cost_rate=Decimal("0.005"),
     )
-    assert result.state == PageState.SUCCESS
-    assert any(flag == "SGOV 시가가 없어 기존 자산을 유지했습니다." for flag in result.data_quality_flags)
-    assert any(row.notes == "month-end risk_on: factor rebalance" for row in result.summary_rows)
-    assert [row.symbol for row in result.fill_rows if row.execution_date == date(2024, 3, 1) and row.action == "BUY"] == ["BBB"]
+    assert result.state == PageState.ERROR
+    assert result.error_message == "2024-02-05 체결일에 SGOV 시가가 없어 목표 포트폴리오를 만들 수 없습니다."

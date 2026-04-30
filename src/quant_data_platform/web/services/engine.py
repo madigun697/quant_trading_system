@@ -9,7 +9,6 @@ from statistics import mean, pstdev
 
 from quant_data_platform.web.presets import (
     MarketTimingOverlayId,
-    SafeAssetSymbol,
     StrategyPreset,
     get_market_timing_overlay,
     get_strategy_preset,
@@ -112,13 +111,20 @@ class OverlaySignal:
 
 
 @dataclass(frozen=True)
+class TargetAllocation:
+    symbol: str
+    target_weight: Decimal
+
+
+@dataclass(frozen=True)
 class PendingAction:
     action_type: str
     signal_date: date
     execution_date: date
-    target_symbols: tuple[str, ...]
+    target_allocations: tuple[TargetAllocation, ...]
     note: str
     resulting_state: str
+    allow_missing_target_hold: bool = False
 
 
 def month_end_signal_dates(calendar_dates: list[date], start_date: date, end_date: date) -> list[date]:
@@ -181,15 +187,36 @@ def select_top_candidates(
     top_n: int,
     execution_opens: dict[tuple[str, date], Decimal | None],
     execution_date: date,
+    factor_weights: dict[str, float] | None = None,
+) -> tuple[list[FactorSnapshotRow], dict[str, int]]:
+    ranked_rows, excluded_counts = rank_factor_candidates(rows, preset, factor_weights)
+    if not ranked_rows:
+        excluded_counts["missing_execution_open"] = 0
+        return [], excluded_counts
+
+    selected_rows: list[FactorSnapshotRow] = []
+    missing_execution_open = 0
+    for row in ranked_rows:
+        if execution_opens.get((row.symbol, execution_date)) is None:
+            missing_execution_open += 1
+            continue
+        selected_rows.append(row)
+        if len(selected_rows) >= top_n:
+            break
+    excluded_counts["missing_execution_open"] = missing_execution_open
+    return selected_rows, excluded_counts
+
+
+def rank_factor_candidates(
+    rows: list[FactorSnapshotRow],
+    preset: StrategyPreset,
+    factor_weights: dict[str, float] | None = None,
 ) -> tuple[list[FactorSnapshotRow], dict[str, int]]:
     eligible_rows: list[FactorSnapshotRow] = []
-    excluded_counts = {"missing_factors": 0, "missing_execution_open": 0}
+    excluded_counts = {"missing_factors": 0}
     for row in rows:
         if any(row.factors[factor.column] is None for factor in preset.factor_specs):
             excluded_counts["missing_factors"] += 1
-            continue
-        if execution_opens.get((row.symbol, execution_date)) is None:
-            excluded_counts["missing_execution_open"] += 1
             continue
         eligible_rows.append(row)
 
@@ -197,10 +224,12 @@ def select_top_candidates(
         return [], excluded_counts
 
     composite_scores: dict[str, float] = defaultdict(float)
+    weights = factor_weights if factor_weights is not None else {}
     for factor in preset.factor_specs:
+        weight = weights.get(factor.column, 1.0)
         factor_scores = percentile_scores(eligible_rows, factor.column, factor.higher_is_better)
         for symbol, score in factor_scores.items():
-            composite_scores[symbol] += score
+            composite_scores[symbol] += score * weight
 
     divisor = len(preset.factor_specs)
     ranked = sorted(
@@ -211,7 +240,33 @@ def select_top_candidates(
             row.symbol,
         ),
     )
-    return ranked[:top_n], excluded_counts
+    return ranked, excluded_counts
+
+
+def select_top_candidates_by_close(
+    rows: list[FactorSnapshotRow],
+    preset: StrategyPreset,
+    top_n: int,
+    close_map: dict[tuple[str, date], Decimal | None],
+    reference_date: date,
+    factor_weights: dict[str, float] | None = None,
+) -> tuple[list[FactorSnapshotRow], dict[str, int]]:
+    ranked_rows, excluded_counts = rank_factor_candidates(rows, preset, factor_weights)
+    if not ranked_rows:
+        excluded_counts["missing_reference_close"] = 0
+        return [], excluded_counts
+
+    selected_rows: list[FactorSnapshotRow] = []
+    missing_reference_close = 0
+    for row in ranked_rows:
+        if close_map.get((row.symbol, reference_date)) is None:
+            missing_reference_close += 1
+            continue
+        selected_rows.append(row)
+        if len(selected_rows) >= top_n:
+            break
+    excluded_counts["missing_reference_close"] = missing_reference_close
+    return selected_rows, excluded_counts
 
 
 def _fallback_close_price(
@@ -256,38 +311,39 @@ def _build_unavailable_reason(
     )
 
 
-def _solve_fee_aware_target_notional(
+def _solve_fee_aware_target_notionals(
     pre_trade_value: Decimal,
     current_notionals: dict[str, Decimal],
-    target_symbols: list[str],
+    target_weights: dict[str, Decimal],
     transaction_cost_rate: Decimal,
-) -> Decimal:
-    if not target_symbols:
-        return Decimal("0")
+) -> dict[str, Decimal]:
+    if not target_weights:
+        return {}
 
-    target_count = Decimal(len(target_symbols))
-    high = pre_trade_value / target_count
+    high = pre_trade_value
     low = Decimal("0")
-    target_set = set(target_symbols)
-    all_symbols = sorted(set(current_notionals) | target_set)
+    all_symbols = sorted(set(current_notionals) | set(target_weights))
 
-    def net_after_costs(target_notional: Decimal) -> Decimal:
+    def net_after_costs(target_total: Decimal) -> Decimal:
         traded_notional = Decimal("0")
         for symbol in all_symbols:
             current = current_notionals.get(symbol, Decimal("0"))
-            target = target_notional if symbol in target_set else Decimal("0")
+            target = target_total * target_weights.get(symbol, Decimal("0"))
             traded_notional += abs(target - current)
         return pre_trade_value - (transaction_cost_rate * traded_notional)
 
     for _ in range(60):
         mid = (low + high) / 2
-        target_total = mid * target_count
         affordable_total = net_after_costs(mid)
+        target_total = mid
         if target_total > affordable_total:
             high = mid
         else:
             low = mid
-    return low
+    return {
+        symbol: low * weight
+        for symbol, weight in target_weights.items()
+    }
 
 
 def _build_history_maps(
@@ -407,6 +463,44 @@ def _evaluate_daily_risk_off(
     return _evaluate_month_end_overlay_signal(overlay_id, current_date, history_map, index_map)
 
 
+def evaluate_daily_overlay_signal(
+    overlay_id: MarketTimingOverlayId,
+    current_date: date,
+    daily_close_rows: list[DailyCloseRow],
+) -> OverlaySignal:
+    history_map, index_map = _build_history_maps(daily_close_rows)
+    return _evaluate_daily_risk_off(overlay_id, current_date, history_map, index_map)
+
+
+def _format_percent(value: Decimal) -> str:
+    text = format(value.normalize(), "f")
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    return text or "0"
+
+
+def _allocation_summary(allocations: tuple[TargetAllocation, ...], *, as_percent: bool = False) -> str:
+    if not allocations:
+        return ""
+    if as_percent:
+        return " / ".join(f"{allocation.symbol} {_format_percent(allocation.target_weight * Decimal('100'))}%" for allocation in allocations)
+    return " / ".join(f"{allocation.symbol} {_format_percent(allocation.target_weight)}" for allocation in allocations)
+
+
+def _equal_weight_allocations(symbols: list[str]) -> tuple[TargetAllocation, ...]:
+    if not symbols:
+        return tuple()
+    weight = Decimal("1") / Decimal(len(symbols))
+    return tuple(TargetAllocation(symbol=symbol, target_weight=weight) for symbol in symbols)
+
+
+def _safe_asset_allocations(input_data: BacktestFormInput) -> tuple[TargetAllocation, ...]:
+    return tuple(
+        TargetAllocation(symbol=symbol.value, target_weight=weight / Decimal("100"))
+        for symbol, weight in input_data.safe_asset_allocations()
+    )
+
+
 def _build_warning_events(
     input_data: BacktestFormInput,
     gross_total_return: Decimal,
@@ -416,6 +510,7 @@ def _build_warning_events(
     insufficient_history: bool,
 ) -> list[WarningEvent]:
     overlay = get_market_timing_overlay(input_data.market_timing_overlay)
+    safe_asset_summary = input_data.safe_asset_summary()
     warnings: list[WarningEvent] = [
         WarningEvent(
             title="실전형 결과 기준",
@@ -427,7 +522,7 @@ def _build_warning_events(
         warnings.append(
             WarningEvent(
                 title="마켓타이밍 오버레이 활성화",
-                body=f"{overlay.label} 오버레이가 켜져 있으며 risk-off 시 {input_data.safe_asset_symbol.value}로 이동합니다.",
+                body=f"{overlay.label} 오버레이가 켜져 있으며 risk-off 시 {safe_asset_summary}로 이동합니다.",
                 tone="info",
             )
         )
@@ -570,6 +665,7 @@ def simulate_backtest(
     benchmark_rows: list[BenchmarkValueRow],
     earliest_available_trade_date: date | None,
     transaction_cost_rate: Decimal,
+    factor_weights: dict[str, float] | None = None,
 ) -> SimulationResult:
     preset = get_strategy_preset(input_data.strategy_preset)
     signal_dates = month_end_signal_dates(calendar_dates, input_data.start_date, input_data.end_date)
@@ -666,6 +762,7 @@ def simulate_backtest(
             input_data.top_n,
             execution_open_map,
             execution_date,
+            factor_weights,
         )
         missing_execution_open_count += excluded_counts["missing_execution_open"]
         if not selected_rows:
@@ -735,7 +832,8 @@ def simulate_backtest(
     total_fees = Decimal("0")
     total_turnover_notional = Decimal("0")
     portfolio_state = "pre_start"
-    safe_asset = input_data.safe_asset_symbol.value
+    safe_asset_allocations = _safe_asset_allocations(input_data)
+    safe_asset_summary = _allocation_summary(safe_asset_allocations, as_percent=True)
     first_execution_date = min(schedule.values()) if schedule else None
     benchmark_shares: Decimal | None = None
     benchmark_last_value: Decimal | None = None
@@ -751,7 +849,7 @@ def simulate_backtest(
         *,
         current_date: date,
         signal_date: date,
-        target_symbols: list[str],
+        target_allocations: tuple[TargetAllocation, ...],
         note: str,
         resulting_state: str,
         allow_missing_target_hold: bool = False,
@@ -762,9 +860,10 @@ def simulate_backtest(
         rebalance_fees = Decimal("0")
         sold_count = 0
 
+        target_weights = {allocation.symbol: allocation.target_weight for allocation in target_allocations}
         current_open_prices = {
             symbol: execution_open_map.get((symbol, current_date))
-            for symbol in sorted(set(gross_positions) | set(net_positions) | set(target_symbols))
+            for symbol in sorted(set(gross_positions) | set(net_positions) | set(target_weights))
         }
         missing_symbols = [
             symbol
@@ -784,14 +883,14 @@ def simulate_backtest(
                 False,
             )
 
-        target_missing = [symbol for symbol in target_symbols if current_open_prices.get(symbol) is None]
+        target_missing = [symbol for symbol in target_weights if current_open_prices.get(symbol) is None]
         if target_missing and allow_missing_target_hold:
             quality_flags.add(f"{', '.join(target_missing[:2])} 시가가 없어 기존 자산을 유지했습니다.")
             summary_rows.append(
                 RebalanceSummary(
                     signal_date=signal_date,
                     execution_date=current_date,
-                    selected_count=len(target_symbols),
+                    selected_count=len(target_allocations),
                     sold_count=0,
                     buy_notional=Decimal("0"),
                     sell_notional=Decimal("0"),
@@ -827,23 +926,26 @@ def simulate_backtest(
         gross_pre_trade_value = gross_cash + sum(gross_current_notionals.values(), start=Decimal("0"))
         net_pre_trade_value = net_cash + sum(net_current_notionals.values(), start=Decimal("0"))
 
-        gross_target_notional = gross_pre_trade_value / Decimal(len(target_symbols)) if target_symbols else Decimal("0")
-        net_target_notional = _solve_fee_aware_target_notional(
+        gross_target_notionals = {
+            symbol: gross_pre_trade_value * target_weight
+            for symbol, target_weight in target_weights.items()
+        }
+        net_target_notionals = _solve_fee_aware_target_notionals(
             net_pre_trade_value,
             net_current_notionals,
-            target_symbols,
+            target_weights,
             transaction_cost_rate,
         )
 
-        all_symbols = sorted(set(gross_positions) | set(net_positions) | set(target_symbols))
+        all_symbols = sorted(set(gross_positions) | set(net_positions) | set(target_weights))
         gross_deltas: dict[str, Decimal] = {}
         net_deltas: dict[str, Decimal] = {}
         for symbol in all_symbols:
             gross_current = gross_current_notionals.get(symbol, Decimal("0"))
             net_current = net_current_notionals.get(symbol, Decimal("0"))
-            target = gross_target_notional if symbol in target_symbols else Decimal("0")
-            gross_deltas[symbol] = target - gross_current
-            net_target = net_target_notional if symbol in target_symbols else Decimal("0")
+            gross_target = gross_target_notionals.get(symbol, Decimal("0"))
+            gross_deltas[symbol] = gross_target - gross_current
+            net_target = net_target_notionals.get(symbol, Decimal("0"))
             net_deltas[symbol] = net_target - net_current
 
         for symbol in all_symbols:
@@ -941,7 +1043,7 @@ def simulate_backtest(
             RebalanceSummary(
                 signal_date=signal_date,
                 execution_date=current_date,
-                selected_count=len(target_symbols),
+                selected_count=len(target_allocations),
                 sold_count=sold_count,
                 buy_notional=rebalance_buy_notional,
                 sell_notional=rebalance_sell_notional,
@@ -959,10 +1061,10 @@ def simulate_backtest(
                 error_reason, changed = execute_target_portfolio(
                     current_date=current_date,
                     signal_date=pending_action.signal_date,
-                    target_symbols=list(pending_action.target_symbols),
+                    target_allocations=pending_action.target_allocations,
                     note=pending_action.note,
                     resulting_state=pending_action.resulting_state,
-                    allow_missing_target_hold=pending_action.target_symbols == (safe_asset,),
+                    allow_missing_target_hold=pending_action.allow_missing_target_hold,
                 )
                 if error_reason is not None:
                     return SimulationResult(
@@ -981,7 +1083,7 @@ def simulate_backtest(
                     RebalanceSummary(
                         signal_date=pending_action.signal_date,
                         execution_date=current_date,
-                        selected_count=len(pending_action.target_symbols),
+                        selected_count=len(pending_action.target_allocations),
                         sold_count=0,
                         buy_notional=Decimal("0"),
                         sell_notional=Decimal("0"),
@@ -1050,7 +1152,7 @@ def simulate_backtest(
                         action_type="target",
                         signal_date=current_date,
                         execution_date=execution_date,
-                        target_symbols=tuple(row.symbol for row in selected_rows),
+                        target_allocations=_equal_weight_allocations([row.symbol for row in selected_rows]),
                         note="month-end risk_on: factor rebalance",
                         resulting_state="invested_in_factor",
                     )
@@ -1059,7 +1161,7 @@ def simulate_backtest(
                         action_type="hold",
                         signal_date=current_date,
                         execution_date=execution_date,
-                        target_symbols=tuple(),
+                        target_allocations=tuple(),
                         note="month-end risk_on: factor hold (no executable basket)",
                         resulting_state="invested_in_factor",
                     )
@@ -1071,8 +1173,8 @@ def simulate_backtest(
                         action_type="target",
                         signal_date=current_date,
                         execution_date=execution_date,
-                        target_symbols=tuple(row.symbol for row in selected_rows),
-                        note=f"month-end risk_on: {safe_asset} -> factor basket",
+                        target_allocations=_equal_weight_allocations([row.symbol for row in selected_rows]),
+                        note=f"month-end risk_on: {safe_asset_summary} -> factor basket",
                         resulting_state="invested_in_factor",
                     )
                 else:
@@ -1082,7 +1184,7 @@ def simulate_backtest(
                         action_type="hold",
                         signal_date=current_date,
                         execution_date=execution_date,
-                        target_symbols=(safe_asset,),
+                        target_allocations=safe_asset_allocations,
                         note="month-end risk_off: safe asset hold",
                         resulting_state="parked_in_safe_asset",
                     )
@@ -1093,8 +1195,8 @@ def simulate_backtest(
                     action_type="target",
                     signal_date=current_date,
                     execution_date=execution_date,
-                    target_symbols=(safe_asset,),
-                    note=f"month-end risk_off: factor basket -> {safe_asset}",
+                    target_allocations=safe_asset_allocations,
+                    note=f"month-end risk_off: factor basket -> {safe_asset_summary}",
                     resulting_state="parked_in_safe_asset",
                 )
             elif selected_rows:
@@ -1102,7 +1204,7 @@ def simulate_backtest(
                     action_type="target",
                     signal_date=current_date,
                     execution_date=execution_date,
-                    target_symbols=tuple(row.symbol for row in selected_rows),
+                    target_allocations=_equal_weight_allocations([row.symbol for row in selected_rows]),
                     note="month-end risk_on: factor rebalance",
                     resulting_state="invested_in_factor",
                 )
@@ -1111,7 +1213,7 @@ def simulate_backtest(
                     action_type="hold",
                     signal_date=current_date,
                     execution_date=execution_date,
-                    target_symbols=tuple(),
+                    target_allocations=tuple(),
                     note="month-end risk_on: factor hold (no executable basket)",
                     resulting_state="invested_in_factor",
                 )
@@ -1132,8 +1234,8 @@ def simulate_backtest(
                         action_type="target",
                         signal_date=current_date,
                         execution_date=execution_date,
-                        target_symbols=(safe_asset,),
-                        note=f"daily risk_off: factor basket -> {safe_asset}",
+                        target_allocations=safe_asset_allocations,
+                        note=f"daily risk_off: factor basket -> {safe_asset_summary}",
                         resulting_state="parked_in_safe_asset",
                     )
 
