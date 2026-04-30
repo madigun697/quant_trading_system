@@ -73,7 +73,7 @@ class BacktestResultWriter:
             "| --- | --- |",
             f"| 전략 프리셋 | {context.selected_preset_detail.label if context.selected_preset_detail else form.strategy_preset.value} |",
             f"| 마켓타이밍 오버레이 | {context.selected_overlay_detail.label if context.selected_overlay_detail else form.market_timing_overlay.value} |",
-            f"| 안전자산 | {context.selected_safe_asset_detail.label if context.selected_safe_asset_detail else form.safe_asset_symbol.value} |",
+            f"| 안전자산 | {context.selected_safe_asset_summary or form.safe_asset_summary()} |",
             f"| 시작일 | {form.start_date.isoformat()} |",
             f"| 종료일 | {form.end_date.isoformat()} |",
             f"| 초기 자본 | {form.initial_capital} |",

@@ -12,6 +12,18 @@ from quant_data_platform.web.services.backtest_result_writer import BacktestResu
 from quant_data_platform.web.services.backtest_service import BacktestPageService
 
 
+def _safe_asset_form_values(**overrides: str) -> dict[str, str]:
+    payload = {
+        "safe_asset_weight_sgov": "100",
+        "safe_asset_weight_jpst": "0",
+        "safe_asset_weight_ief": "0",
+        "safe_asset_weight_tlt": "0",
+        "safe_asset_weight_gld": "0",
+    }
+    payload.update(overrides)
+    return payload
+
+
 class FakeRepository:
     def __init__(self) -> None:
         self.freshness_calls = 0
@@ -118,12 +130,12 @@ def test_error_context_uses_raw_form_values_for_selected_details() -> None:
         form_values={
             "strategy_preset": StrategyPresetId.QUALITY_LOWVOL.value,
             "market_timing_overlay": "none",
-            "safe_asset_symbol": "SGOV",
             "start_date": "2024-01-01",
             "end_date": "2023-01-01",
             "initial_capital": "1000",
             "top_n": "10",
             "transaction_cost_preset": TransactionCostPreset.BASE.value,
+            **_safe_asset_form_values(),
         },
     )
     assert context.selected_preset_detail is not None
@@ -174,6 +186,29 @@ def test_build_context_fetches_daily_closes_only_for_selected_symbols() -> None:
     context = service.build_context(form)
     assert context.state == PageState.SUCCESS
     assert repo.daily_close_symbols == ["AAA", "IEF", "SGOV", "SPY", "VT"]
+    assert context.selected_safe_asset_summary == "SGOV 100%"
+
+
+def test_build_context_includes_only_non_zero_safe_assets_in_support_symbol_fetch() -> None:
+    repo = FakeRepository()
+    service = BacktestPageService(repo)
+    form = BacktestFormInput(
+        strategy_preset=StrategyPresetId.VALUE_QUALITY,
+        safe_asset_weight_sgov=Decimal("60"),
+        safe_asset_weight_jpst=Decimal("0"),
+        safe_asset_weight_ief=Decimal("40"),
+        safe_asset_weight_tlt=Decimal("0"),
+        safe_asset_weight_gld=Decimal("0"),
+        start_date=date(2024, 1, 1),
+        end_date=date(2024, 2, 1),
+        initial_capital=Decimal("1000"),
+        top_n=10,
+        transaction_cost_preset=TransactionCostPreset.CONSERVATIVE,
+    )
+    context = service.build_context(form)
+    assert context.state == PageState.SUCCESS
+    assert repo.daily_close_symbols == ["AAA", "IEF", "SGOV", "SPY", "VT"]
+    assert context.selected_safe_asset_summary == "SGOV 60% / IEF 40%"
 
 
 def test_build_context_returns_friendly_error_when_readiness_fails() -> None:
@@ -282,6 +317,7 @@ def test_save_context_writes_result_bundle(tmp_path: Path) -> None:
     markdown = (result_dir / "backtest_input_summary.md").read_text(encoding="utf-8")
     assert "## 입력값 요약" in markdown
     assert "## 핵심 성과 요약" in markdown
+    assert "| 안전자산 | SGOV 100% |" in markdown
     rebalance_csv = (result_dir / "rebalance_summary.csv").read_text(encoding="utf-8")
     assert "signal_date,execution_date,selected_count,sold_count" in rebalance_csv
     fill_csv = (result_dir / "fill_log.csv").read_text(encoding="utf-8")

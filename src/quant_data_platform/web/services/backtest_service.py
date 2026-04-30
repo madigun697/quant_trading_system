@@ -10,7 +10,6 @@ import psycopg
 from quant_data_platform.web.presets import (
     TRANSACTION_COST_BPS,
     MarketTimingOverlayId,
-    SafeAssetSymbol,
     StrategyPresetId,
     TransactionCostPreset,
     get_market_timing_overlay,
@@ -29,7 +28,7 @@ from quant_data_platform.web.schemas import (
     OverlayDetail,
     PageState,
     PresetDetail,
-    SafeAssetDetail,
+    SafeAssetAllocationDetail,
     SummaryMetric,
     TradeLogDetailRow,
     TradeLogSummaryRow,
@@ -171,7 +170,6 @@ class BacktestPageService:
         default_form = BacktestFormInput(
             strategy_preset=StrategyPresetId.VALUE_QUALITY,
             market_timing_overlay=MarketTimingOverlayId.NONE,
-            safe_asset_symbol=SafeAssetSymbol.SGOV,
             start_date=(today or date.today()) - timedelta(days=365 * 5),
             end_date=today or date.today(),
             initial_capital=Decimal("100000"),
@@ -188,7 +186,8 @@ class BacktestPageService:
             transaction_cost_options=list_cost_options(),
             selected_preset_detail=self._selected_preset_detail(form_values["strategy_preset"]),
             selected_overlay_detail=self._selected_overlay_detail(form_values["market_timing_overlay"]),
-            selected_safe_asset_detail=self._selected_safe_asset_detail(form_values["safe_asset_symbol"]),
+            selected_safe_asset_allocations=self._selected_safe_asset_allocations(form_values),
+            selected_safe_asset_summary=self._selected_safe_asset_summary(form_values),
             selected_cost_detail=self._selected_cost_detail(form_values["transaction_cost_preset"]),
         )
 
@@ -211,7 +210,8 @@ class BacktestPageService:
             transaction_cost_options=list_cost_options(),
             selected_preset_detail=self._selected_preset_detail(base_form["strategy_preset"]),
             selected_overlay_detail=self._selected_overlay_detail(base_form["market_timing_overlay"]),
-            selected_safe_asset_detail=self._selected_safe_asset_detail(base_form["safe_asset_symbol"]),
+            selected_safe_asset_allocations=self._selected_safe_asset_allocations(base_form),
+            selected_safe_asset_summary=self._selected_safe_asset_summary(base_form),
             selected_cost_detail=self._selected_cost_detail(base_form["transaction_cost_preset"]),
             error_message=message,
             field_errors=field_errors or {},
@@ -228,7 +228,7 @@ class BacktestPageService:
             cache_key = (
                 form.strategy_preset.value,
                 form.market_timing_overlay.value,
-                form.safe_asset_symbol.value,
+                form.safe_asset_summary(),
                 form.start_date.isoformat(),
                 form.end_date.isoformat(),
                 str(form.initial_capital),
@@ -296,7 +296,8 @@ class BacktestPageService:
         monthly_execution_price_rows = self.repository.fetch_execution_prices(all_factor_symbols, monthly_execution_dates)
         earliest_available = self.repository.fetch_earliest_available_trade_date(form.strategy_preset)
         selected_symbols = self._selected_symbols_for_daily_closes(form, spy_calendar, factor_rows, monthly_execution_price_rows)
-        support_symbols = sorted(set(selected_symbols) | {"SPY", "VT", "IEF", form.safe_asset_symbol.value})
+        configured_safe_assets = {symbol.value for symbol, _weight in form.safe_asset_allocations()}
+        support_symbols = sorted(set(selected_symbols) | {"SPY", "VT", "IEF", *configured_safe_assets})
         calendar_trade_dates = [calendar_date for calendar_date in spy_calendar if form.start_date <= calendar_date <= form.end_date]
         support_execution_price_rows = self.repository.fetch_execution_prices(support_symbols, calendar_trade_dates)
         execution_price_rows = self._merge_execution_rows(monthly_execution_price_rows, support_execution_price_rows)
@@ -402,7 +403,7 @@ class BacktestPageService:
             ]
         if readiness.code == "missing_support_symbol_data":
             return [
-                "SPY, VT, IEF, SGOV, JPST 지원 심볼의 시장 데이터 백필이 끝났는지 확인해 주세요.",
+                "SPY, VT, IEF, SGOV, JPST, TLT, GLD 지원 심볼의 시장 데이터 백필이 끝났는지 확인해 주세요.",
                 "support symbol 적재 후 stg와 int 모델을 다시 실행해 주세요.",
             ]
         return ["데이터베이스 로그와 애플리케이션 로그를 함께 확인해 주세요."]
@@ -419,7 +420,8 @@ class BacktestPageService:
                 transaction_cost_options=list_cost_options(),
                 selected_preset_detail=self._selected_preset_detail(form_values["strategy_preset"]),
                 selected_overlay_detail=self._selected_overlay_detail(form_values["market_timing_overlay"]),
-                selected_safe_asset_detail=self._selected_safe_asset_detail(form_values["safe_asset_symbol"]),
+                selected_safe_asset_allocations=self._selected_safe_asset_allocations(form_values),
+                selected_safe_asset_summary=self._selected_safe_asset_summary(form_values),
                 selected_cost_detail=self._selected_cost_detail(form_values["transaction_cost_preset"]),
                 warnings=[WarningMessage(title=warning.title, body=warning.body, tone=warning.tone) for warning in simulation.warnings],
                 data_quality_flags=simulation.data_quality_flags,
@@ -485,7 +487,8 @@ class BacktestPageService:
             transaction_cost_options=list_cost_options(),
             selected_preset_detail=self._selected_preset_detail(form_values["strategy_preset"]),
             selected_overlay_detail=self._selected_overlay_detail(form_values["market_timing_overlay"]),
-            selected_safe_asset_detail=self._selected_safe_asset_detail(form_values["safe_asset_symbol"]),
+            selected_safe_asset_allocations=self._selected_safe_asset_allocations(form_values),
+            selected_safe_asset_summary=self._selected_safe_asset_summary(form_values),
             selected_cost_detail=self._selected_cost_detail(form_values["transaction_cost_preset"]),
             summary_metrics=summary_metrics,
             equity_curve=equity_points,
@@ -526,11 +529,29 @@ class BacktestPageService:
                 return OverlayDetail.model_validate(option)
         return None
 
-    def _selected_safe_asset_detail(self, safe_asset_id: str) -> SafeAssetDetail | None:
+    def _selected_safe_asset_allocations(self, form_values: dict[str, Any]) -> list[SafeAssetAllocationDetail]:
+        allocations: list[SafeAssetAllocationDetail] = []
         for option in list_safe_asset_options():
-            if option["id"] == safe_asset_id:
-                return SafeAssetDetail.model_validate(option)
-        return None
+            raw_weight = str(form_values.get(option["weight_field"], "0")).strip() or "0"
+            try:
+                weight = Decimal(raw_weight)
+            except Exception:
+                continue
+            if weight <= 0:
+                continue
+            allocations.append(
+                SafeAssetAllocationDetail.model_validate(
+                    {
+                        **option,
+                        "weight_percent": f"{_format_decimal(weight, 1).rstrip('0').rstrip('.')}%",
+                    }
+                )
+            )
+        return allocations
+
+    def _selected_safe_asset_summary(self, form_values: dict[str, Any]) -> str:
+        allocations = self._selected_safe_asset_allocations(form_values)
+        return " / ".join(f"{asset.label} {asset.weight_percent}" for asset in allocations)
 
     def _selected_cost_detail(self, cost_id: str) -> CostDetail | None:
         for option in list_cost_options():

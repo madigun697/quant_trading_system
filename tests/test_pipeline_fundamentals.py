@@ -188,7 +188,7 @@ def test_run_market_backfill_recent_uses_batched_tiingo(monkeypatch) -> None:
 
     monkeypatch.setattr("quant_data_platform.pipeline.ingest_tiingo_prices_batched", _fake_ingest_tiingo_prices_batched)
 
-    settings = Settings(TIINGO_DISCOVERY_BATCH_SIZE=200)
+    settings = Settings(TIINGO_DISCOVERY_BATCH_SIZE=200, SUPPORT_MARKET_SYMBOLS="SPY,VT,IEF,SGOV,JPST,TLT,GLD")
     result = run_market_backfill(
         cohort="us_liquidity_700_v1",
         mode="recent",
@@ -196,11 +196,11 @@ def test_run_market_backfill_recent_uses_batched_tiingo(monkeypatch) -> None:
         settings=settings,
     )
 
-    assert calls["symbols"] == ["AAPL", "MSFT", "NVDA", "SPY", "VT", "IEF", "SGOV", "JPST"]
+    assert calls["symbols"] == ["AAPL", "MSFT", "NVDA", "SPY", "VT", "IEF", "SGOV", "JPST", "TLT", "GLD"]
     assert calls["batch_size"] == 200
     assert result["listing_rows"] == 123
     assert result["price_rows"] == 30
-    assert result["symbol_count"] == 8
+    assert result["symbol_count"] == 10
 
 
 def test_run_market_backfill_recent_falls_back_to_yfinance_on_tiingo_429(monkeypatch) -> None:
@@ -226,7 +226,7 @@ def test_run_market_backfill_recent_falls_back_to_yfinance_on_tiingo_429(monkeyp
         },
     )
 
-    settings = Settings(TIINGO_DISCOVERY_BATCH_SIZE=200)
+    settings = Settings(TIINGO_DISCOVERY_BATCH_SIZE=200, SUPPORT_MARKET_SYMBOLS="SPY,VT,IEF,SGOV,JPST,TLT,GLD")
     result = run_market_backfill(
         cohort="us_liquidity_700_v1",
         mode="recent",
@@ -263,12 +263,12 @@ def test_run_market_backfill_full_universe_filters_common_stock_symbols(monkeypa
         full_universe=True,
         mode="recent",
         end_date=date(2026, 4, 23),
-        settings=Settings(TIINGO_DISCOVERY_BATCH_SIZE=200),
+        settings=Settings(TIINGO_DISCOVERY_BATCH_SIZE=200, SUPPORT_MARKET_SYMBOLS="SPY,VT,IEF,SGOV,JPST,TLT,GLD"),
     )
 
-    assert calls["symbols"] == ["AAPL", "MSFT", "SPY", "VT", "IEF", "SGOV", "JPST"]
+    assert calls["symbols"] == ["AAPL", "MSFT", "SPY", "VT", "IEF", "SGOV", "JPST", "TLT", "GLD"]
     assert result["full_universe"] == 1
-    assert result["symbol_count"] == 7
+    assert result["symbol_count"] == 9
 
 
 def test_run_market_backfill_preserves_explicit_symbols_without_support_merge(monkeypatch) -> None:

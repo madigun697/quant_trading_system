@@ -11,6 +11,18 @@ from quant_data_platform.web.repositories.backtest_repo import ReadinessStatus
 from quant_data_platform.web.schemas import BacktestPageContext, PageState
 
 
+def _safe_asset_form_data(**overrides: str) -> dict[str, str]:
+    payload = {
+        "safe_asset_weight_sgov": "100",
+        "safe_asset_weight_jpst": "0",
+        "safe_asset_weight_ief": "0",
+        "safe_asset_weight_tlt": "0",
+        "safe_asset_weight_gld": "0",
+    }
+    payload.update(overrides)
+    return payload
+
+
 class FakeService:
     def __init__(self, desired_state: PageState = PageState.SUCCESS) -> None:
         self.desired_state = desired_state
@@ -22,7 +34,11 @@ class FakeService:
             form_values={
                 "strategy_preset": "value_quality",
                 "market_timing_overlay": "none",
-                "safe_asset_symbol": "SGOV",
+                "safe_asset_weight_sgov": "100",
+                "safe_asset_weight_jpst": "0",
+                "safe_asset_weight_ief": "0",
+                "safe_asset_weight_tlt": "0",
+                "safe_asset_weight_gld": "0",
                 "start_date": "2024-01-01",
                 "end_date": "2024-12-31",
                 "initial_capital": "100000",
@@ -35,10 +51,14 @@ class FakeService:
                 {"id": "emergency_brake_asymmetric", "label": "Emergency", "description": "desc", "lookback_label": "lb", "rationale": "overlay rationale", "signal_asset": "SPY", "comparison_asset": None, "execution_notes": [], "risk_notes": []},
             ],
             safe_asset_options=[
-                {"id": "SGOV", "label": "SGOV", "description": "safe", "details": "detail"},
-                {"id": "JPST", "label": "JPST", "description": "safe", "details": "detail"},
+                {"id": "SGOV", "label": "SGOV", "description": "safe", "details": "detail", "weight_field": "safe_asset_weight_sgov"},
+                {"id": "JPST", "label": "JPST", "description": "safe", "details": "detail", "weight_field": "safe_asset_weight_jpst"},
+                {"id": "IEF", "label": "IEF", "description": "safe", "details": "detail", "weight_field": "safe_asset_weight_ief"},
+                {"id": "TLT", "label": "TLT", "description": "safe", "details": "detail", "weight_field": "safe_asset_weight_tlt"},
+                {"id": "GLD", "label": "GLD", "description": "safe", "details": "detail", "weight_field": "safe_asset_weight_gld"},
             ],
             transaction_cost_options=[{"id": "conservative", "label": "Conservative", "description": "왕복 총비용 50bp", "round_trip_bps": 50, "details": "detail"}],
+            selected_safe_asset_summary="SGOV 100%",
         )
 
     def readiness_status(self) -> ReadinessStatus:
@@ -60,13 +80,18 @@ class FakeService:
         context.form_values = {
             "strategy_preset": form.strategy_preset.value,
             "market_timing_overlay": form.market_timing_overlay.value,
-            "safe_asset_symbol": form.safe_asset_symbol.value,
+            "safe_asset_weight_sgov": str(form.safe_asset_weight_sgov),
+            "safe_asset_weight_jpst": str(form.safe_asset_weight_jpst),
+            "safe_asset_weight_ief": str(form.safe_asset_weight_ief),
+            "safe_asset_weight_tlt": str(form.safe_asset_weight_tlt),
+            "safe_asset_weight_gld": str(form.safe_asset_weight_gld),
             "start_date": form.start_date.isoformat(),
             "end_date": form.end_date.isoformat(),
             "initial_capital": str(form.initial_capital),
             "top_n": str(form.top_n),
             "transaction_cost_preset": form.transaction_cost_preset.value,
         }
+        context.selected_safe_asset_summary = form.safe_asset_summary()
         if self.desired_state == PageState.SUCCESS:
             context.summary_metrics = []
             context.equity_curve = []
@@ -118,12 +143,12 @@ def test_post_valid_form_returns_success(preset_id: str) -> None:
         data={
             "strategy_preset": preset_id,
             "market_timing_overlay": "none",
-            "safe_asset_symbol": "SGOV",
             "start_date": "2024-01-01",
             "end_date": "2024-12-31",
             "initial_capital": "100000",
             "top_n": "10",
             "transaction_cost_preset": "conservative",
+            **_safe_asset_form_data(),
         },
     )
     assert response.status_code == 200
@@ -140,16 +165,36 @@ def test_post_invalid_form_returns_error_state() -> None:
         data={
             "strategy_preset": "value_quality",
             "market_timing_overlay": "none",
-            "safe_asset_symbol": "SGOV",
             "start_date": "2024-12-31",
             "end_date": "2024-01-01",
             "initial_capital": "100000",
             "top_n": "10",
             "transaction_cost_preset": "conservative",
+            **_safe_asset_form_data(),
         },
     )
     assert response.status_code == 422
     assert "입력값을 다시 확인해 주세요." in response.text
+
+
+def test_post_invalid_safe_asset_total_returns_field_error() -> None:
+    app = create_app(service=FakeService(PageState.SUCCESS))
+    client = TestClient(app)
+    response = client.post(
+        "/backtest",
+        data={
+            "strategy_preset": "value_quality",
+            "market_timing_overlay": "none",
+            "start_date": "2024-01-01",
+            "end_date": "2024-12-31",
+            "initial_capital": "100000",
+            "top_n": "10",
+            "transaction_cost_preset": "conservative",
+            **_safe_asset_form_data(safe_asset_weight_sgov="60", safe_asset_weight_ief="30"),
+        },
+    )
+    assert response.status_code == 422
+    assert "안전자산 비중 합계는 정확히 100%여야 합니다." in response.text
 
 
 def test_healthz_returns_service_unavailable_when_readiness_fails() -> None:
@@ -175,12 +220,12 @@ def test_post_insufficient_history_returns_state_message() -> None:
         data={
             "strategy_preset": "value_quality",
             "market_timing_overlay": "none",
-            "safe_asset_symbol": "SGOV",
             "start_date": "2024-01-01",
             "end_date": "2024-12-31",
             "initial_capital": "100000",
             "top_n": "10",
             "transaction_cost_preset": "conservative",
+            **_safe_asset_form_data(),
         },
     )
     assert response.status_code == 200
@@ -195,12 +240,12 @@ def test_post_no_data_returns_state_message() -> None:
         data={
             "strategy_preset": "value_quality",
             "market_timing_overlay": "none",
-            "safe_asset_symbol": "SGOV",
             "start_date": "2024-01-01",
             "end_date": "2024-12-31",
             "initial_capital": "100000",
             "top_n": "10",
             "transaction_cost_preset": "conservative",
+            **_safe_asset_form_data(),
         },
     )
     assert response.status_code == 200
@@ -215,18 +260,60 @@ def test_form_values_persist_after_post() -> None:
         data={
             "strategy_preset": "value_quality",
             "market_timing_overlay": "emergency_brake_asymmetric",
-            "safe_asset_symbol": "JPST",
             "start_date": "2024-02-01",
             "end_date": "2024-12-31",
             "initial_capital": "250000",
             "top_n": "20",
             "transaction_cost_preset": "base",
+            **_safe_asset_form_data(safe_asset_weight_sgov="0", safe_asset_weight_jpst="100"),
         },
     )
     assert response.status_code == 200
     assert 'value="2024-02-01"' in response.text
     assert 'value="250000"' in response.text
-    assert '<option value="JPST" selected>' in response.text
+    assert 'name="safe_asset_weight_jpst"' in response.text
+    assert 'value="100"' in response.text
+
+
+def test_post_legacy_safe_asset_symbol_is_upgraded_to_weight_inputs() -> None:
+    app = create_app(service=FakeService(PageState.SUCCESS))
+    client = TestClient(app)
+    response = client.post(
+        "/backtest",
+        data={
+            "strategy_preset": "value_quality",
+            "market_timing_overlay": "none",
+            "safe_asset_symbol": "JPST",
+            "start_date": "2024-02-01",
+            "end_date": "2024-12-31",
+            "initial_capital": "100000",
+            "top_n": "10",
+            "transaction_cost_preset": "conservative",
+        },
+    )
+    assert response.status_code == 200
+    assert 'name="safe_asset_weight_jpst"' in response.text
+    assert 'value="100"' in response.text
+
+
+def test_post_invalid_legacy_safe_asset_symbol_returns_error() -> None:
+    app = create_app(service=FakeService(PageState.SUCCESS))
+    client = TestClient(app)
+    response = client.post(
+        "/backtest",
+        data={
+            "strategy_preset": "value_quality",
+            "market_timing_overlay": "none",
+            "safe_asset_symbol": "INVALID",
+            "start_date": "2024-02-01",
+            "end_date": "2024-12-31",
+            "initial_capital": "100000",
+            "top_n": "10",
+            "transaction_cost_preset": "conservative",
+        },
+    )
+    assert response.status_code == 422
+    assert "safe_asset_symbol 값이 유효하지 않습니다." in response.text
 
 
 def test_post_runtime_error_uses_context_status_code() -> None:
@@ -237,12 +324,12 @@ def test_post_runtime_error_uses_context_status_code() -> None:
         data={
             "strategy_preset": "value_quality",
             "market_timing_overlay": "none",
-            "safe_asset_symbol": "SGOV",
             "start_date": "2024-01-01",
             "end_date": "2024-12-31",
             "initial_capital": "100000",
             "top_n": "10",
             "transaction_cost_preset": "conservative",
+            **_safe_asset_form_data(),
         },
     )
     assert response.status_code == 503
@@ -257,12 +344,12 @@ def test_post_save_valid_form_returns_success_message() -> None:
         data={
             "strategy_preset": "value_quality",
             "market_timing_overlay": "none",
-            "safe_asset_symbol": "SGOV",
             "start_date": "2024-01-01",
             "end_date": "2024-12-31",
             "initial_capital": "100000",
             "top_n": "10",
             "transaction_cost_preset": "conservative",
+            **_safe_asset_form_data(),
         },
     )
     assert response.status_code == 200
@@ -278,12 +365,12 @@ def test_post_save_invalid_form_returns_error_state() -> None:
         data={
             "strategy_preset": "value_quality",
             "market_timing_overlay": "none",
-            "safe_asset_symbol": "SGOV",
             "start_date": "2024-12-31",
             "end_date": "2024-01-01",
             "initial_capital": "100000",
             "top_n": "10",
             "transaction_cost_preset": "conservative",
+            **_safe_asset_form_data(),
         },
     )
     assert response.status_code == 422
@@ -299,12 +386,12 @@ def test_post_save_non_success_returns_failure_message() -> None:
         data={
             "strategy_preset": "value_quality",
             "market_timing_overlay": "none",
-            "safe_asset_symbol": "SGOV",
             "start_date": "2024-01-01",
             "end_date": "2024-12-31",
             "initial_capital": "100000",
             "top_n": "10",
             "transaction_cost_preset": "conservative",
+            **_safe_asset_form_data(),
         },
     )
     assert response.status_code == 200
@@ -327,12 +414,12 @@ def test_post_save_propagates_service_failure_status() -> None:
         data={
             "strategy_preset": "value_quality",
             "market_timing_overlay": "none",
-            "safe_asset_symbol": "SGOV",
             "start_date": "2024-01-01",
             "end_date": "2024-12-31",
             "initial_capital": "100000",
             "top_n": "10",
             "transaction_cost_preset": "conservative",
+            **_safe_asset_form_data(),
         },
     )
     assert response.status_code == 500

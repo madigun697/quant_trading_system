@@ -45,22 +45,37 @@
     {% if field_errors.get('market_timing_overlay') %}<small class="field-error">{{ field_errors['market_timing_overlay'] }}</small>{% endif %}
   </label>
 
-  <label class="field">
-    <span>안전자산</span>
-    <select name="safe_asset_symbol" data-safe-asset-select>
+  <div class="field">
+    <span>안전자산 비중</span>
+    <div class="safe-asset-grid">
       {% for asset in safe_asset_options %}
-        <option value="{{ asset.id }}" {% if form_values.safe_asset_symbol == asset.id %}selected{% endif %}>
-          {{ asset.label }}
-        </option>
+        <label class="field safe-asset-weight-field">
+          <span>{{ asset.label }}</span>
+          <input
+            type="number"
+            step="0.1"
+            min="0"
+            max="100"
+            name="{{ asset.weight_field }}"
+            value="{{ form_values[asset.weight_field] }}"
+            data-safe-asset-weight-input
+            data-safe-asset-weight-field="{{ asset.weight_field }}"
+          >
+          <small class="field-help">{{ asset.description }} · {{ asset.details }}</small>
+          {% if field_errors.get(asset.weight_field) %}<small class="field-error">{{ field_errors[asset.weight_field] }}</small>{% endif %}
+        </label>
       {% endfor %}
-    </select>
+    </div>
     <small class="field-help" data-safe-asset-help aria-live="polite">
-      {% if selected_safe_asset_detail %}
-        {{ selected_safe_asset_detail.description }} · {{ selected_safe_asset_detail.details }}
+      {% if selected_safe_asset_summary %}
+        현재 바스켓: {{ selected_safe_asset_summary }}
+      {% else %}
+        합계 100%로 입력해 주세요.
       {% endif %}
     </small>
-    {% if field_errors.get('safe_asset_symbol') %}<small class="field-error">{{ field_errors['safe_asset_symbol'] }}</small>{% endif %}
-  </label>
+    <small class="field-help">합계 <strong data-safe-asset-total>100%</strong> / 100%</small>
+    {% if field_errors.get('safe_asset_allocation') %}<small class="field-error">{{ field_errors['safe_asset_allocation'] }}</small>{% endif %}
+  </div>
 
   <div class="field-row">
     <label class="field">
@@ -161,8 +176,8 @@
         <article class="selection-chip">
           <strong>피난 자산</strong>
           <p data-selection-safe-asset>
-            {% if selected_safe_asset_detail %}
-              {{ selected_safe_asset_detail.description }} · {{ selected_safe_asset_detail.details }}
+            {% if selected_safe_asset_summary %}
+              {{ selected_safe_asset_summary }}
             {% endif %}
           </p>
         </article>
@@ -201,7 +216,7 @@
           <p><strong>오버레이 신호 자산</strong> <span data-selection-overlay-assets>{% if selected_overlay_detail %}{{ selected_overlay_detail.signal_asset }}{% if selected_overlay_detail.comparison_asset %} vs {{ selected_overlay_detail.comparison_asset }}{% endif %}{% endif %}</span></p>
           <p><strong>오버레이 데이터 요구</strong> <span data-selection-overlay-lookback>{{ selected_overlay_detail.lookback_label if selected_overlay_detail else '' }}</span></p>
           <p><strong>오버레이 주의 메모</strong> <span data-selection-overlay-risk>{% if selected_overlay_detail %}{{ selected_overlay_detail.risk_notes | join(' / ') }}{% endif %}</span></p>
-          <p><strong>실제 안전자산</strong> <span data-selection-safe-asset-detail>{% if selected_safe_asset_detail %}{{ selected_safe_asset_detail.label }} · {{ selected_safe_asset_detail.details }}{% endif %}</span></p>
+          <p><strong>실제 안전자산</strong> <span data-selection-safe-asset-detail>{% if selected_safe_asset_allocations %}{% for asset in selected_safe_asset_allocations %}{{ asset.label }} {{ asset.weight_percent }} · {{ asset.details }}{% if not loop.last %} / {% endif %}{% endfor %}{% endif %}</span></p>
         </div>
       </details>
     </div>

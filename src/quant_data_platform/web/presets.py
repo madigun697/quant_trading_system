@@ -21,6 +21,9 @@ class MarketTimingOverlayId(StrEnum):
 class SafeAssetSymbol(StrEnum):
     SGOV = "SGOV"
     JPST = "JPST"
+    IEF = "IEF"
+    TLT = "TLT"
+    GLD = "GLD"
 
 
 class TransactionCostPreset(StrEnum):
@@ -274,6 +277,33 @@ SAFE_ASSET_OPTIONS: dict[SafeAssetSymbol, SafeAssetOption] = {
         description="초단기 회사채 중심 초단기 채권 ETF",
         details="현금성에 가깝지만 SGOV보다는 약간의 신용 스프레드 노출이 있습니다. 상장 이력은 SGOV보다 깁니다.",
     ),
+    SafeAssetSymbol.IEF: SafeAssetOption(
+        symbol=SafeAssetSymbol.IEF,
+        label="IEF",
+        description="미국 7-10년 국채 ETF",
+        details="중기 듀레이션 국채로 경기 둔화 구간 방어력이 기대되지만 금리 변동에는 더 민감합니다.",
+    ),
+    SafeAssetSymbol.TLT: SafeAssetOption(
+        symbol=SafeAssetSymbol.TLT,
+        label="TLT",
+        description="미국 20년 이상 장기국채 ETF",
+        details="위기 국면에서 강한 헤지 역할을 기대할 수 있지만 금리 변동성과 가격 흔들림도 큽니다.",
+    ),
+    SafeAssetSymbol.GLD: SafeAssetOption(
+        symbol=SafeAssetSymbol.GLD,
+        label="GLD",
+        description="금 현물 추종 ETF",
+        details="실질금리와 달러 흐름의 영향을 받는 대체 안전자산으로, 채권과 다른 방어 성격을 기대할 수 있습니다.",
+    ),
+}
+
+
+SAFE_ASSET_WEIGHT_FIELDS: dict[SafeAssetSymbol, str] = {
+    SafeAssetSymbol.SGOV: "safe_asset_weight_sgov",
+    SafeAssetSymbol.JPST: "safe_asset_weight_jpst",
+    SafeAssetSymbol.IEF: "safe_asset_weight_ief",
+    SafeAssetSymbol.TLT: "safe_asset_weight_tlt",
+    SafeAssetSymbol.GLD: "safe_asset_weight_gld",
 }
 
 
@@ -334,6 +364,7 @@ def serialize_safe_asset_option(option: SafeAssetOption) -> dict[str, Any]:
         "label": option.label,
         "description": option.description,
         "details": option.details,
+        "weight_field": SAFE_ASSET_WEIGHT_FIELDS[option.symbol],
     }
 
 
