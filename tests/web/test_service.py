@@ -19,6 +19,7 @@ def _safe_asset_form_values(**overrides: str) -> dict[str, str]:
         "safe_asset_weight_ief": "0",
         "safe_asset_weight_tlt": "0",
         "safe_asset_weight_gld": "0",
+        "safe_asset_weight_xle": "0",
     }
     payload.update(overrides)
     return payload
@@ -199,6 +200,7 @@ def test_build_context_includes_only_non_zero_safe_assets_in_support_symbol_fetc
         safe_asset_weight_ief=Decimal("40"),
         safe_asset_weight_tlt=Decimal("0"),
         safe_asset_weight_gld=Decimal("0"),
+        safe_asset_weight_xle=Decimal("0"),
         start_date=date(2024, 1, 1),
         end_date=date(2024, 2, 1),
         initial_capital=Decimal("1000"),

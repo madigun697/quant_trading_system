@@ -403,7 +403,7 @@ class BacktestPageService:
             ]
         if readiness.code == "missing_support_symbol_data":
             return [
-                "SPY, VT, IEF, SGOV, JPST, TLT, GLD 지원 심볼의 시장 데이터 백필이 끝났는지 확인해 주세요.",
+                "SPY, VT, IEF, SGOV, JPST, TLT, GLD, XLE 지원 심볼의 시장 데이터 백필이 끝났는지 확인해 주세요.",
                 "support symbol 적재 후 stg와 int 모델을 다시 실행해 주세요.",
             ]
         return ["데이터베이스 로그와 애플리케이션 로그를 함께 확인해 주세요."]

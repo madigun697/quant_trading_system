@@ -187,9 +187,8 @@ def select_top_candidates(
     top_n: int,
     execution_opens: dict[tuple[str, date], Decimal | None],
     execution_date: date,
-    factor_weights: dict[str, float] | None = None,
 ) -> tuple[list[FactorSnapshotRow], dict[str, int]]:
-    ranked_rows, excluded_counts = rank_factor_candidates(rows, preset, factor_weights)
+    ranked_rows, excluded_counts = rank_factor_candidates(rows, preset)
     if not ranked_rows:
         excluded_counts["missing_execution_open"] = 0
         return [], excluded_counts
@@ -210,7 +209,6 @@ def select_top_candidates(
 def rank_factor_candidates(
     rows: list[FactorSnapshotRow],
     preset: StrategyPreset,
-    factor_weights: dict[str, float] | None = None,
 ) -> tuple[list[FactorSnapshotRow], dict[str, int]]:
     eligible_rows: list[FactorSnapshotRow] = []
     excluded_counts = {"missing_factors": 0}
@@ -224,12 +222,10 @@ def rank_factor_candidates(
         return [], excluded_counts
 
     composite_scores: dict[str, float] = defaultdict(float)
-    weights = factor_weights if factor_weights is not None else {}
     for factor in preset.factor_specs:
-        weight = weights.get(factor.column, 1.0)
         factor_scores = percentile_scores(eligible_rows, factor.column, factor.higher_is_better)
         for symbol, score in factor_scores.items():
-            composite_scores[symbol] += score * weight
+            composite_scores[symbol] += score
 
     divisor = len(preset.factor_specs)
     ranked = sorted(
@@ -249,9 +245,8 @@ def select_top_candidates_by_close(
     top_n: int,
     close_map: dict[tuple[str, date], Decimal | None],
     reference_date: date,
-    factor_weights: dict[str, float] | None = None,
 ) -> tuple[list[FactorSnapshotRow], dict[str, int]]:
-    ranked_rows, excluded_counts = rank_factor_candidates(rows, preset, factor_weights)
+    ranked_rows, excluded_counts = rank_factor_candidates(rows, preset)
     if not ranked_rows:
         excluded_counts["missing_reference_close"] = 0
         return [], excluded_counts
@@ -383,31 +378,6 @@ def _sma_for(
     return sum(values, start=Decimal("0")) / Decimal(window)
 
 
-def _is_below_sma_for_consecutive_trading_days(
-    symbol: str,
-    current_date: date,
-    *,
-    window: int,
-    consecutive_days: int,
-    history_map: dict[str, list[tuple[date, Decimal]]],
-    index_map: dict[str, dict[date, int]],
-) -> bool | None:
-    idx = index_map.get(symbol, {}).get(current_date)
-    if idx is None:
-        return None
-    start_idx = idx - consecutive_days + 1
-    if start_idx < 0:
-        return None
-    for offset in range(start_idx, idx + 1):
-        trade_date, close_value = history_map[symbol][offset]
-        sma_value = _sma_for(symbol, trade_date, window, history_map, index_map)
-        if sma_value is None:
-            return None
-        if close_value >= sma_value:
-            return False
-    return True
-
-
 def _return_for(
     symbol: str,
     current_date: date,
@@ -476,24 +446,14 @@ def _evaluate_daily_risk_off(
     if overlay_id == MarketTimingOverlayId.EMERGENCY_BRAKE_ASYMMETRIC:
         close_value = _close_for("SPY", current_date, history_map, index_map)
         sma50 = _sma_for("SPY", current_date, 50, history_map, index_map)
-        below_sma_for_3_days = _is_below_sma_for_consecutive_trading_days(
-            "SPY",
-            current_date,
-            window=50,
-            consecutive_days=3,
-            history_map=history_map,
-            index_map=index_map,
-        )
         facts: list[str] = []
         if close_value is None:
             facts.append("SPY 종가가 없습니다.")
         if sma50 is None:
             facts.append("SPY 50일선 계산 이력이 부족합니다.")
-        if close_value is not None and sma50 is not None and below_sma_for_3_days is None:
-            facts.append("SPY 50일선 3거래일 연속 이탈 여부를 계산할 이력이 부족합니다.")
         if facts:
             return OverlaySignal(risk_on=None, facts=facts)
-        return OverlaySignal(risk_on=not bool(below_sma_for_3_days), facts=[])
+        return OverlaySignal(risk_on=not bool(close_value < sma50), facts=[])
 
     return _evaluate_month_end_overlay_signal(overlay_id, current_date, history_map, index_map)
 
@@ -700,7 +660,6 @@ def simulate_backtest(
     benchmark_rows: list[BenchmarkValueRow],
     earliest_available_trade_date: date | None,
     transaction_cost_rate: Decimal,
-    factor_weights: dict[str, float] | None = None,
 ) -> SimulationResult:
     preset = get_strategy_preset(input_data.strategy_preset)
     signal_dates = month_end_signal_dates(calendar_dates, input_data.start_date, input_data.end_date)
@@ -797,7 +756,6 @@ def simulate_backtest(
             input_data.top_n,
             execution_open_map,
             execution_date,
-            factor_weights,
         )
         missing_execution_open_count += excluded_counts["missing_execution_open"]
         if not selected_rows:
@@ -1244,18 +1202,20 @@ def simulate_backtest(
                     resulting_state="invested_in_factor",
                 )
             elif portfolio_state == "invested_in_factor":
-                    pending_action = PendingAction(
-                        action_type="hold",
-                        signal_date=current_date,
-                        execution_date=execution_date,
-                        target_allocations=tuple(),
-                        note="month-end risk_on: factor hold (no executable basket)",
-                        resulting_state="invested_in_factor",
-                    )
+                pending_action = PendingAction(
+                    action_type="hold",
+                    signal_date=current_date,
+                    execution_date=execution_date,
+                    target_allocations=tuple(),
+                    note="month-end risk_on: factor hold (no executable basket)",
+                    resulting_state="invested_in_factor",
+                )
+            continue
 
         if (
             input_data.market_timing_overlay != MarketTimingOverlayId.NONE
             and portfolio_state == "invested_in_factor"
+            and pending_action is None
         ):
             daily_signal = _evaluate_daily_risk_off(input_data.market_timing_overlay, current_date, history_map, index_map)
             if daily_signal.risk_on is None:

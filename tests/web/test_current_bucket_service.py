@@ -126,7 +126,13 @@ def test_build_context_keeps_stock_bucket_visible_during_risk_off() -> None:
         DailyCloseRow("SPY", date(2024, 1, 1) + timedelta(days=index), Decimal("100"))
         for index in range(59)
     )
-    repo.daily_close_rows.append(DailyCloseRow("SPY", date(2024, 2, 29), Decimal("80")))
+    repo.daily_close_rows.extend(
+        [
+            DailyCloseRow("SPY", date(2024, 2, 27), Decimal("80")),
+            DailyCloseRow("SPY", date(2024, 2, 28), Decimal("79")),
+            DailyCloseRow("SPY", date(2024, 2, 29), Decimal("78")),
+        ]
+    )
     service = CurrentBucketPageService(repo, clock=lambda: _market_clock(2024, 2, 29, 16, 30))
 
     context = service.build_context(

@@ -39,7 +39,7 @@ class Settings(BaseSettings):
     yfinance_batch_size: int = Field(default=100, alias="YFINANCE_BATCH_SIZE")
     sec_daily_request_budget: int = Field(default=50, alias="SEC_DAILY_REQUEST_BUDGET")
     support_market_symbols: Annotated[tuple[str, ...], NoDecode] = Field(
-        default=("SPY", "VT", "IEF", "SGOV", "JPST", "TLT", "GLD"),
+        default=("SPY", "VT", "IEF", "SGOV", "JPST", "TLT", "GLD", "XLE"),
         alias="SUPPORT_MARKET_SYMBOLS",
     )
     yfinance_timeout_seconds: float = Field(default=30.0, alias="YFINANCE_TIMEOUT_SECONDS")
@@ -58,13 +58,13 @@ class Settings(BaseSettings):
     @classmethod
     def _normalize_support_market_symbols(cls, value: object) -> tuple[str, ...] | object:
         if value is None:
-            return ("SPY", "VT", "IEF", "SGOV", "JPST", "TLT", "GLD")
+            return ("SPY", "VT", "IEF", "SGOV", "JPST", "TLT", "GLD","XLE")
         if isinstance(value, str):
             tokens = [token.strip().upper() for token in value.split(",") if token.strip()]
-            return tuple(tokens or ["SPY", "VT", "IEF", "SGOV", "JPST", "TLT", "GLD"])
+            return tuple(tokens or ["SPY", "VT", "IEF", "SGOV", "JPST", "TLT", "GLD","XLE"])
         if isinstance(value, (list, tuple, set)):
             tokens = [str(token).strip().upper() for token in value if str(token).strip()]
-            return tuple(tokens or ["SPY", "VT", "IEF", "SGOV", "JPST", "TLT", "GLD"])
+            return tuple(tokens or ["SPY", "VT", "IEF", "SGOV", "JPST", "TLT", "GLD","XLE"])
         return value
 
     @property

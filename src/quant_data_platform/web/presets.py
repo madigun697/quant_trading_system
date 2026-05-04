@@ -24,6 +24,7 @@ class SafeAssetSymbol(StrEnum):
     IEF = "IEF"
     TLT = "TLT"
     GLD = "GLD"
+    XLE = "XLE"
 
 
 class TransactionCostPreset(StrEnum):
@@ -233,7 +234,7 @@ MARKET_TIMING_OVERLAYS: dict[MarketTimingOverlayId, MarketTimingOverlay] = {
         signal_asset="SPY",
         comparison_asset=None,
         execution_notes=(
-            "매일 종가 기준으로 SPY가 50일선 아래면 다음 거래일에 안전자산으로 이동합니다.",
+            "매일 종가 기준으로 SPY가 50일선 아래에 3거래일 연속 머물면 다음 거래일에 안전자산으로 이동합니다.",
             "월말에는 SPY가 200일선 위이고 최근 20거래일 수익률이 양수일 때만 팩터 포트폴리오로 재진입합니다.",
             "월중에 risk-on이 다시 켜져도 월말 전에는 재진입하지 않습니다.",
         ),
@@ -295,6 +296,12 @@ SAFE_ASSET_OPTIONS: dict[SafeAssetSymbol, SafeAssetOption] = {
         description="금 현물 추종 ETF",
         details="실질금리와 달러 흐름의 영향을 받는 대체 안전자산으로, 채권과 다른 방어 성격을 기대할 수 있습니다.",
     ),
+    SafeAssetSymbol.XLE: SafeAssetOption(
+        symbol=SafeAssetSymbol.XLE,
+        label="XLE",
+        description="에너지 섹터 ETF",
+        details="에너지 섹터의 대표적인 ETF로, 유가 상승 시 강세를 보일 수 있습니다.",
+    ),
 }
 
 
@@ -304,6 +311,7 @@ SAFE_ASSET_WEIGHT_FIELDS: dict[SafeAssetSymbol, str] = {
     SafeAssetSymbol.IEF: "safe_asset_weight_ief",
     SafeAssetSymbol.TLT: "safe_asset_weight_tlt",
     SafeAssetSymbol.GLD: "safe_asset_weight_gld",
+    SafeAssetSymbol.XLE: "safe_asset_weight_xle",
 }
 
 

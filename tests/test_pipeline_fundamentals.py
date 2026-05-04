@@ -188,7 +188,7 @@ def test_run_market_backfill_recent_uses_batched_tiingo(monkeypatch) -> None:
 
     monkeypatch.setattr("quant_data_platform.pipeline.ingest_tiingo_prices_batched", _fake_ingest_tiingo_prices_batched)
 
-    settings = Settings(TIINGO_DISCOVERY_BATCH_SIZE=200, SUPPORT_MARKET_SYMBOLS="SPY,VT,IEF,SGOV,JPST,TLT,GLD")
+    settings = Settings(TIINGO_DISCOVERY_BATCH_SIZE=200, SUPPORT_MARKET_SYMBOLS="SPY,VT,IEF,SGOV,JPST,TLT,GLD,XLE")
     result = run_market_backfill(
         cohort="us_liquidity_700_v1",
         mode="recent",
@@ -196,11 +196,11 @@ def test_run_market_backfill_recent_uses_batched_tiingo(monkeypatch) -> None:
         settings=settings,
     )
 
-    assert calls["symbols"] == ["AAPL", "MSFT", "NVDA", "SPY", "VT", "IEF", "SGOV", "JPST", "TLT", "GLD"]
+    assert calls["symbols"] == ["AAPL", "MSFT", "NVDA", "SPY", "VT", "IEF", "SGOV", "JPST", "TLT", "GLD", "XLE"]
     assert calls["batch_size"] == 200
     assert result["listing_rows"] == 123
     assert result["price_rows"] == 30
-    assert result["symbol_count"] == 10
+    assert result["symbol_count"] == 11
 
 
 def test_run_market_backfill_recent_falls_back_to_yfinance_on_tiingo_429(monkeypatch) -> None:
@@ -226,7 +226,7 @@ def test_run_market_backfill_recent_falls_back_to_yfinance_on_tiingo_429(monkeyp
         },
     )
 
-    settings = Settings(TIINGO_DISCOVERY_BATCH_SIZE=200, SUPPORT_MARKET_SYMBOLS="SPY,VT,IEF,SGOV,JPST,TLT,GLD")
+    settings = Settings(TIINGO_DISCOVERY_BATCH_SIZE=200, SUPPORT_MARKET_SYMBOLS="SPY,VT,IEF,SGOV,JPST,TLT,GLD,XLE")
     result = run_market_backfill(
         cohort="us_liquidity_700_v1",
         mode="recent",

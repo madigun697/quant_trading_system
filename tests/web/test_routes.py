@@ -18,6 +18,7 @@ def _safe_asset_form_data(**overrides: str) -> dict[str, str]:
         "safe_asset_weight_ief": "0",
         "safe_asset_weight_tlt": "0",
         "safe_asset_weight_gld": "0",
+        "safe_asset_weight_xle": "0",
     }
     payload.update(overrides)
     return payload
@@ -39,6 +40,7 @@ class FakeService:
                 "safe_asset_weight_ief": "0",
                 "safe_asset_weight_tlt": "0",
                 "safe_asset_weight_gld": "0",
+                "safe_asset_weight_xle": "0",
                 "start_date": "2024-01-01",
                 "end_date": "2024-12-31",
                 "initial_capital": "100000",
@@ -56,6 +58,7 @@ class FakeService:
                 {"id": "IEF", "label": "IEF", "description": "safe", "details": "detail", "weight_field": "safe_asset_weight_ief"},
                 {"id": "TLT", "label": "TLT", "description": "safe", "details": "detail", "weight_field": "safe_asset_weight_tlt"},
                 {"id": "GLD", "label": "GLD", "description": "safe", "details": "detail", "weight_field": "safe_asset_weight_gld"},
+                {"id": "XLE", "label": "XLE", "description": "safe", "details": "detail", "weight_field": "safe_asset_weight_xle"},
             ],
             transaction_cost_options=[{"id": "conservative", "label": "Conservative", "description": "왕복 총비용 50bp", "round_trip_bps": 50, "details": "detail"}],
             selected_safe_asset_summary="SGOV 100%",
@@ -85,6 +88,7 @@ class FakeService:
             "safe_asset_weight_ief": str(form.safe_asset_weight_ief),
             "safe_asset_weight_tlt": str(form.safe_asset_weight_tlt),
             "safe_asset_weight_gld": str(form.safe_asset_weight_gld),
+            "safe_asset_weight_xle": str(form.safe_asset_weight_xle),
             "start_date": form.start_date.isoformat(),
             "end_date": form.end_date.isoformat(),
             "initial_capital": str(form.initial_capital),

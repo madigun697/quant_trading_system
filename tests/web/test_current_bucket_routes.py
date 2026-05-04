@@ -13,6 +13,7 @@ def _safe_asset_form_data(**overrides: str) -> dict[str, str]:
         "safe_asset_weight_ief": "0",
         "safe_asset_weight_tlt": "0",
         "safe_asset_weight_gld": "0",
+        "safe_asset_weight_xle": "0",
     }
     payload.update(overrides)
     return payload
@@ -33,6 +34,7 @@ class FakeCurrentBucketService:
                 "safe_asset_weight_ief": "0",
                 "safe_asset_weight_tlt": "0",
                 "safe_asset_weight_gld": "0",
+                "safe_asset_weight_xle": "0",
                 "investable_capital": "100000",
                 "top_n": "10",
             },
@@ -44,6 +46,7 @@ class FakeCurrentBucketService:
                 {"id": "IEF", "label": "IEF", "description": "safe", "details": "detail", "weight_field": "safe_asset_weight_ief"},
                 {"id": "TLT", "label": "TLT", "description": "safe", "details": "detail", "weight_field": "safe_asset_weight_tlt"},
                 {"id": "GLD", "label": "GLD", "description": "safe", "details": "detail", "weight_field": "safe_asset_weight_gld"},
+                {"id": "XLE", "label": "XLE", "description": "safe", "details": "detail", "weight_field": "safe_asset_weight_xle"},
             ],
             selected_safe_asset_summary="SGOV 100%",
             safe_asset_summary="SGOV 100%",
@@ -70,6 +73,7 @@ class FakeCurrentBucketService:
             "safe_asset_weight_ief": str(form.safe_asset_weight_ief),
             "safe_asset_weight_tlt": str(form.safe_asset_weight_tlt),
             "safe_asset_weight_gld": str(form.safe_asset_weight_gld),
+            "safe_asset_weight_xle": str(form.safe_asset_weight_xle),
             "investable_capital": str(form.investable_capital),
             "top_n": str(form.top_n),
         }

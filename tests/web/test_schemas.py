@@ -20,6 +20,7 @@ def test_backtest_form_defaults_to_sgov_100_percent() -> None:
     assert form.safe_asset_weight_ief == Decimal("0")
     assert form.safe_asset_weight_tlt == Decimal("0")
     assert form.safe_asset_weight_gld == Decimal("0")
+    assert form.safe_asset_weight_xle == Decimal("0")
     assert form.safe_asset_summary() == "SGOV 100%"
 
 
@@ -63,6 +64,7 @@ def test_backtest_form_rejects_invalid_legacy_safe_asset_symbol() -> None:
                 "safe_asset_weight_ief": "0",
                 "safe_asset_weight_tlt": "0",
                 "safe_asset_weight_gld": "0",
+                "safe_asset_weight_xle": "0",
             },
             "안전자산 비중 합계는 정확히 100%여야 합니다.",
         ),
@@ -89,6 +91,7 @@ def test_current_bucket_form_defaults_to_sgov_100_percent() -> None:
     assert form.safe_asset_weight_ief == Decimal("0")
     assert form.safe_asset_weight_tlt == Decimal("0")
     assert form.safe_asset_weight_gld == Decimal("0")
+    assert form.safe_asset_weight_xle == Decimal("0")
     assert form.safe_asset_summary() == "SGOV 100%"
 
 
