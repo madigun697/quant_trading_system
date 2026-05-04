@@ -60,6 +60,7 @@ def _safe_asset_weight_map_from_fields(
     tlt: Decimal,
     gld: Decimal,
     xle: Decimal,
+    shy: Decimal,
 ) -> dict[SafeAssetSymbol, Decimal]:
     return {
         SafeAssetSymbol.SGOV: sgov,
@@ -68,6 +69,7 @@ def _safe_asset_weight_map_from_fields(
         SafeAssetSymbol.TLT: tlt,
         SafeAssetSymbol.GLD: gld,
         SafeAssetSymbol.XLE: xle,
+        SafeAssetSymbol.SHY: shy,
     }
 
 
@@ -95,6 +97,7 @@ class BacktestFormInput(BaseModel):
     safe_asset_weight_tlt: Decimal = Decimal("0")
     safe_asset_weight_gld: Decimal = Decimal("0")
     safe_asset_weight_xle: Decimal = Decimal("0")
+    safe_asset_weight_shy: Decimal = Decimal("0")
     start_date: date = Field(default_factory=default_start_date)
     end_date: date = Field(default_factory=date.today)
     initial_capital: Decimal = Decimal("100000")
@@ -144,6 +147,7 @@ class BacktestFormInput(BaseModel):
             tlt=self.safe_asset_weight_tlt,
             gld=self.safe_asset_weight_gld,
             xle=self.safe_asset_weight_xle,
+            shy=self.safe_asset_weight_shy,
         )
 
     def safe_asset_allocations(self) -> list[tuple[SafeAssetSymbol, Decimal]]:
@@ -162,6 +166,7 @@ class CurrentBucketFormInput(BaseModel):
     safe_asset_weight_tlt: Decimal = Decimal("0")
     safe_asset_weight_gld: Decimal = Decimal("0")
     safe_asset_weight_xle: Decimal = Decimal("0")
+    safe_asset_weight_shy: Decimal = Decimal("0")
     investable_capital: Decimal = Decimal("100000")
     top_n: int = 10
 
@@ -204,6 +209,7 @@ class CurrentBucketFormInput(BaseModel):
             tlt=self.safe_asset_weight_tlt,
             gld=self.safe_asset_weight_gld,
             xle=self.safe_asset_weight_xle,
+            shy=self.safe_asset_weight_shy,
         )
 
     def safe_asset_allocations(self) -> list[tuple[SafeAssetSymbol, Decimal]]:

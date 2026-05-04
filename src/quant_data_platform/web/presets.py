@@ -26,6 +26,7 @@ class SafeAssetSymbol(StrEnum):
     TLT = "TLT"
     GLD = "GLD"
     XLE = "XLE"
+    SHY = "SHY"
 
 
 class TransactionCostPreset(StrEnum):
@@ -324,6 +325,12 @@ SAFE_ASSET_OPTIONS: dict[SafeAssetSymbol, SafeAssetOption] = {
         description="에너지 섹터 ETF",
         details="에너지 섹터의 대표적인 ETF로, 유가 상승 시 강세를 보일 수 있습니다.",
     ),
+    SafeAssetSymbol.SHY: SafeAssetOption(
+        symbol=SafeAssetSymbol.SHY,
+        label="SHY",
+        description="미국 1-3년 단기 국채 ETF",
+        details="금리 변동성이 제한적인 단기 국채로, 비교적 안정적인 방어력을 제공합니다.",
+    ),
 }
 
 
@@ -334,6 +341,7 @@ SAFE_ASSET_WEIGHT_FIELDS: dict[SafeAssetSymbol, str] = {
     SafeAssetSymbol.TLT: "safe_asset_weight_tlt",
     SafeAssetSymbol.GLD: "safe_asset_weight_gld",
     SafeAssetSymbol.XLE: "safe_asset_weight_xle",
+    SafeAssetSymbol.SHY: "safe_asset_weight_shy",
 }
 
 
