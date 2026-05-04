@@ -263,12 +263,12 @@ def test_run_market_backfill_full_universe_filters_common_stock_symbols(monkeypa
         full_universe=True,
         mode="recent",
         end_date=date(2026, 4, 23),
-        settings=Settings(TIINGO_DISCOVERY_BATCH_SIZE=200, SUPPORT_MARKET_SYMBOLS="SPY,VT,IEF,SGOV,JPST,TLT,GLD"),
+        settings=Settings(TIINGO_DISCOVERY_BATCH_SIZE=200, SUPPORT_MARKET_SYMBOLS="SPY,VT,IEF,SGOV,JPST,TLT,GLD,XLE"),
     )
 
-    assert calls["symbols"] == ["AAPL", "MSFT", "SPY", "VT", "IEF", "SGOV", "JPST", "TLT", "GLD"]
+    assert calls["symbols"] == ["AAPL", "MSFT", "SPY", "VT", "IEF", "SGOV", "JPST", "TLT", "GLD", "XLE"]
     assert result["full_universe"] == 1
-    assert result["symbol_count"] == 9
+    assert result["symbol_count"] == 10
 
 
 def test_run_market_backfill_preserves_explicit_symbols_without_support_merge(monkeypatch) -> None:
