@@ -16,6 +16,7 @@ class MarketTimingOverlayId(StrEnum):
     NONE = "none"
     EMERGENCY_BRAKE_ASYMMETRIC = "emergency_brake_asymmetric"
     CANARY_ASSET_SIGNAL = "canary_asset_signal"
+    GRADUATED_POSITION_SIZING = "graduated_position_sizing"
 
 
 class SafeAssetSymbol(StrEnum):
@@ -260,6 +261,27 @@ MARKET_TIMING_OVERLAYS: dict[MarketTimingOverlayId, MarketTimingOverlay] = {
         risk_notes=(
             "IEF는 신호 비교 자산일 뿐 실제 파킹 자산은 아닙니다.",
             "VT나 IEF의 긴 가격 이력이 부족한 초기 기간에는 실행이 제한될 수 있습니다.",
+        ),
+    ),
+    MarketTimingOverlayId.GRADUATED_POSITION_SIZING: MarketTimingOverlay(
+        overlay_id=MarketTimingOverlayId.GRADUATED_POSITION_SIZING,
+        label="Graduated Position Sizing",
+        description="SPY와 200일 이동평균선의 상대적 위치에 따라 4단계로 안전자산 비중을 조절하는 오버레이입니다.",
+        lookback_days=400,
+        lookback_label="SPY 50일선, 200일선 계산을 위해 약 1년 이상 가격 이력이 필요합니다.",
+        rationale="Emergency Brake처럼 전량 전환하는 대신, 시장 상황에 따라 단계적으로 포지션을 조절해 whipsaw 비용을 줄이면서도 하락장 방어력을 유지하려는 오버레이입니다.",
+        signal_asset="SPY",
+        comparison_asset=None,
+        execution_notes=(
+            "월말 종가 기준: SPY > SMA200×1.02이면 100% 전략자산, SMA200 < SPY ≤ SMA200×1.02이면 70% 전략 + 30% 안전, SMA200×0.98 ≤ SPY ≤ SMA200이면 50% 전략 + 50% 안전, SPY < SMA200×0.98이면 전량 안전자산.",
+            "매일 종가 기준으로 SPY가 50일선 아래에 3거래일 연속 머물면 30% 안전자산으로 추가 전환합니다.",
+            "일간 신호는 월말 신호보다 가벼운 방어만 합니다. 이미 월말 기준 더 높은 안전자산 비중이면 유지합니다.",
+            "월중에는 월말 포지션을 유지하고, 월말에만 포지션 비중을 재조정합니다.",
+        ),
+        risk_notes=(
+            "4단계 구간 경계에서 빈번한 전환이 발생할 수 있습니다.",
+            "SPY 가격 데이터 품질과 휴장일 캘린더에 민감합니다.",
+            "상승장 초기에 30%~50% 안전자산 유지로 수익 기회를 일부 놓칠 수 있습니다.",
         ),
     ),
 }

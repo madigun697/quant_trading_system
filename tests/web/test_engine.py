@@ -798,3 +798,303 @@ def test_simulate_backtest_returns_error_when_safe_asset_open_is_missing_on_risk
     )
     assert result.state == PageState.ERROR
     assert result.error_message == "2024-02-07 체결일에 SGOV 시가가 없어 목표 포트폴리오를 만들 수 없습니다."
+
+
+def _make_spy_history(start: date, count: int, value: Decimal, *, end_before: date | None = None) -> list[DailyCloseRow]:
+    """테스트용 SPY 히스토리를 생성합니다."""
+    rows = []
+    for offset in range(count):
+        trade_date = start + timedelta(days=offset)
+        if end_before is not None and trade_date >= end_before:
+            break
+        if trade_date.weekday() < 5:
+            rows.append(DailyCloseRow("SPY", trade_date, value))
+    return rows
+
+
+def test_graduated_monthly_full_risk_off_below_lower_bound() -> None:
+    """SPY < SMA200 × 0.98 → 전량 안전자산"""
+    preset = get_strategy_preset(StrategyPresetId.VALUE_QUALITY)
+    form = make_form(
+        market_timing_overlay=MarketTimingOverlayId.GRADUATED_POSITION_SIZING,
+        start_date=date(2024, 1, 31),
+        end_date=date(2024, 2, 1),
+    )
+    calendar = [date(2024, 1, 31), date(2024, 2, 1)]
+    strong = {factor.column: Decimal("2") for factor in preset.factor_specs}
+    factor_rows = [FactorSnapshotRow("AAA", date(2024, 1, 31), 1, strong)]
+    execution_rows = [
+        ExecutionPriceRow("AAA", date(2024, 2, 1), Decimal("10")),
+        ExecutionPriceRow("SGOV", date(2024, 2, 1), Decimal("100")),
+        ExecutionPriceRow("SPY", date(2024, 2, 1), Decimal("80")),
+    ]
+    # Build SPY history: 200+ days at 100, then month-end at 80 (well below SMA200*0.98)
+    daily_rows = _make_spy_history(date(2023, 4, 1), 320, Decimal("100"), end_before=date(2024, 1, 31))
+    daily_rows.append(DailyCloseRow("SPY", date(2024, 1, 31), Decimal("80")))
+    daily_rows.extend([
+        DailyCloseRow("AAA", date(2024, 2, 1), Decimal("10")),
+        DailyCloseRow("SGOV", date(2024, 2, 1), Decimal("100")),
+    ])
+    result = simulate_backtest(
+        input_data=form,
+        calendar_dates=calendar,
+        factor_rows=factor_rows,
+        execution_price_rows=execution_rows,
+        daily_close_rows=daily_rows,
+        benchmark_rows=[BenchmarkValueRow(date(2024, 2, 1), Decimal("80"))],
+        earliest_available_trade_date=date(2024, 1, 31),
+        transaction_cost_rate=Decimal("0.005"),
+    )
+    assert result.state == PageState.SUCCESS
+    assert any("100% safe" in (row.notes or "") for row in result.summary_rows)
+    buy_symbols = [row.symbol for row in result.fill_rows if row.action == "BUY"]
+    assert "SGOV" in buy_symbols
+    assert "AAA" not in buy_symbols
+
+
+def test_graduated_monthly_partial_50_between_lower_and_sma200() -> None:
+    """SMA200 × 0.98 ≤ SPY ≤ SMA200 → 50% 전략 + 50% 안전"""
+    preset = get_strategy_preset(StrategyPresetId.VALUE_QUALITY)
+    form = make_form(
+        market_timing_overlay=MarketTimingOverlayId.GRADUATED_POSITION_SIZING,
+        start_date=date(2024, 1, 31),
+        end_date=date(2024, 2, 1),
+    )
+    calendar = [date(2024, 1, 31), date(2024, 2, 1)]
+    strong = {factor.column: Decimal("2") for factor in preset.factor_specs}
+    factor_rows = [FactorSnapshotRow("AAA", date(2024, 1, 31), 1, strong)]
+    execution_rows = [
+        ExecutionPriceRow("AAA", date(2024, 2, 1), Decimal("10")),
+        ExecutionPriceRow("SGOV", date(2024, 2, 1), Decimal("100")),
+        ExecutionPriceRow("SPY", date(2024, 2, 1), Decimal("99")),
+    ]
+    # SMA200 ≈ 100, SPY at 99 → between 98 (lower) and 100 (SMA200)
+    daily_rows = _make_spy_history(date(2023, 4, 1), 320, Decimal("100"), end_before=date(2024, 1, 31))
+    daily_rows.append(DailyCloseRow("SPY", date(2024, 1, 31), Decimal("99")))
+    daily_rows.extend([
+        DailyCloseRow("AAA", date(2024, 2, 1), Decimal("10")),
+        DailyCloseRow("SGOV", date(2024, 2, 1), Decimal("100")),
+    ])
+    result = simulate_backtest(
+        input_data=form,
+        calendar_dates=calendar,
+        factor_rows=factor_rows,
+        execution_price_rows=execution_rows,
+        daily_close_rows=daily_rows,
+        benchmark_rows=[BenchmarkValueRow(date(2024, 2, 1), Decimal("99"))],
+        earliest_available_trade_date=date(2024, 1, 31),
+        transaction_cost_rate=Decimal("0.005"),
+    )
+    assert result.state == PageState.SUCCESS
+    assert any("50% factor + 50% safe" in (row.notes or "") for row in result.summary_rows)
+    buy_symbols = [row.symbol for row in result.fill_rows if row.action == "BUY"]
+    assert "AAA" in buy_symbols
+    assert "SGOV" in buy_symbols
+    buy_notionals = {row.symbol: row.shares * row.execution_price for row in result.fill_rows if row.action == "BUY"}
+    total_buy = sum(buy_notionals.values(), start=Decimal("0"))
+    assert float(buy_notionals["AAA"] / total_buy) == pytest.approx(0.5, abs=0.02)
+
+
+def test_graduated_monthly_partial_70_between_sma200_and_upper() -> None:
+    """SMA200 < SPY ≤ SMA200 × 1.02 → 70% 전략 + 30% 안전"""
+    preset = get_strategy_preset(StrategyPresetId.VALUE_QUALITY)
+    form = make_form(
+        market_timing_overlay=MarketTimingOverlayId.GRADUATED_POSITION_SIZING,
+        start_date=date(2024, 1, 31),
+        end_date=date(2024, 2, 1),
+    )
+    calendar = [date(2024, 1, 31), date(2024, 2, 1)]
+    strong = {factor.column: Decimal("2") for factor in preset.factor_specs}
+    factor_rows = [FactorSnapshotRow("AAA", date(2024, 1, 31), 1, strong)]
+    execution_rows = [
+        ExecutionPriceRow("AAA", date(2024, 2, 1), Decimal("10")),
+        ExecutionPriceRow("SGOV", date(2024, 2, 1), Decimal("100")),
+        ExecutionPriceRow("SPY", date(2024, 2, 1), Decimal("101")),
+    ]
+    # SMA200 ≈ 100, SPY at 101 → between 100 (SMA200) and 102 (upper)
+    daily_rows = _make_spy_history(date(2023, 4, 1), 320, Decimal("100"), end_before=date(2024, 1, 31))
+    daily_rows.append(DailyCloseRow("SPY", date(2024, 1, 31), Decimal("101")))
+    daily_rows.extend([
+        DailyCloseRow("AAA", date(2024, 2, 1), Decimal("10")),
+        DailyCloseRow("SGOV", date(2024, 2, 1), Decimal("100")),
+    ])
+    result = simulate_backtest(
+        input_data=form,
+        calendar_dates=calendar,
+        factor_rows=factor_rows,
+        execution_price_rows=execution_rows,
+        daily_close_rows=daily_rows,
+        benchmark_rows=[BenchmarkValueRow(date(2024, 2, 1), Decimal("101"))],
+        earliest_available_trade_date=date(2024, 1, 31),
+        transaction_cost_rate=Decimal("0.005"),
+    )
+    assert result.state == PageState.SUCCESS
+    assert any("70% factor + 30% safe" in (row.notes or "") for row in result.summary_rows)
+    buy_symbols = [row.symbol for row in result.fill_rows if row.action == "BUY"]
+    assert "AAA" in buy_symbols
+    assert "SGOV" in buy_symbols
+    buy_notionals = {row.symbol: row.shares * row.execution_price for row in result.fill_rows if row.action == "BUY"}
+    total_buy = sum(buy_notionals.values(), start=Decimal("0"))
+    assert float(buy_notionals["AAA"] / total_buy) == pytest.approx(0.7, abs=0.02)
+
+
+def test_graduated_monthly_full_risk_on_above_upper() -> None:
+    """SPY > SMA200 × 1.02 → 100% 전략자산"""
+    preset = get_strategy_preset(StrategyPresetId.VALUE_QUALITY)
+    form = make_form(
+        market_timing_overlay=MarketTimingOverlayId.GRADUATED_POSITION_SIZING,
+        start_date=date(2024, 1, 31),
+        end_date=date(2024, 2, 1),
+    )
+    calendar = [date(2024, 1, 31), date(2024, 2, 1)]
+    strong = {factor.column: Decimal("2") for factor in preset.factor_specs}
+    factor_rows = [FactorSnapshotRow("AAA", date(2024, 1, 31), 1, strong)]
+    execution_rows = [
+        ExecutionPriceRow("AAA", date(2024, 2, 1), Decimal("10")),
+        ExecutionPriceRow("SPY", date(2024, 2, 1), Decimal("110")),
+    ]
+    # SMA200 ≈ 100, SPY at 110 → well above 102 (upper)
+    daily_rows = _make_spy_history(date(2023, 4, 1), 320, Decimal("100"), end_before=date(2024, 1, 31))
+    daily_rows.append(DailyCloseRow("SPY", date(2024, 1, 31), Decimal("110")))
+    daily_rows.extend([
+        DailyCloseRow("AAA", date(2024, 2, 1), Decimal("10")),
+    ])
+    result = simulate_backtest(
+        input_data=form,
+        calendar_dates=calendar,
+        factor_rows=factor_rows,
+        execution_price_rows=execution_rows,
+        daily_close_rows=daily_rows,
+        benchmark_rows=[BenchmarkValueRow(date(2024, 2, 1), Decimal("110"))],
+        earliest_available_trade_date=date(2024, 1, 31),
+        transaction_cost_rate=Decimal("0.005"),
+    )
+    assert result.state == PageState.SUCCESS
+    assert any("100% factor" in (row.notes or "") for row in result.summary_rows)
+    buy_symbols = [row.symbol for row in result.fill_rows if row.action == "BUY"]
+    assert buy_symbols == ["AAA"]
+
+
+def test_graduated_daily_50ma_breach_moves_30_percent_to_safe() -> None:
+    """50일선 3일 연속 이탈 → invested_in_factor에서 30% 안전자산 전환"""
+    preset = get_strategy_preset(StrategyPresetId.VALUE_QUALITY)
+    form = make_form(
+        market_timing_overlay=MarketTimingOverlayId.GRADUATED_POSITION_SIZING,
+        start_date=date(2024, 1, 31),
+        end_date=date(2024, 2, 7),
+    )
+    calendar = [date(2024, 1, 31), date(2024, 2, 1), date(2024, 2, 2), date(2024, 2, 5), date(2024, 2, 6), date(2024, 2, 7)]
+    strong = {factor.column: Decimal("2") for factor in preset.factor_specs}
+    factor_rows = [FactorSnapshotRow("AAA", date(2024, 1, 31), 1, strong)]
+    execution_rows = [
+        ExecutionPriceRow("AAA", date(2024, 2, 1), Decimal("10")),
+        ExecutionPriceRow("AAA", date(2024, 2, 7), Decimal("10")),
+        ExecutionPriceRow("SGOV", date(2024, 2, 7), Decimal("100")),
+        ExecutionPriceRow("SPY", date(2024, 2, 1), Decimal("110")),
+        ExecutionPriceRow("SPY", date(2024, 2, 7), Decimal("88")),
+    ]
+    daily_rows = [
+        DailyCloseRow("AAA", date(2024, 2, 1), Decimal("10")),
+        DailyCloseRow("AAA", date(2024, 2, 2), Decimal("10")),
+        DailyCloseRow("AAA", date(2024, 2, 5), Decimal("10")),
+        DailyCloseRow("AAA", date(2024, 2, 6), Decimal("10")),
+        DailyCloseRow("AAA", date(2024, 2, 7), Decimal("10")),
+        DailyCloseRow("SGOV", date(2024, 2, 6), Decimal("100")),
+        DailyCloseRow("SGOV", date(2024, 2, 7), Decimal("100")),
+    ]
+    # SMA200 ≈ 100, month-end SPY=110 → above upper bound → 100% factor
+    # Then SPY drops below 50-day SMA for 3 consecutive days
+    daily_rows.extend(_make_spy_history(date(2023, 4, 1), 320, Decimal("100"), end_before=date(2024, 1, 31)))
+    daily_rows.extend([
+        DailyCloseRow("SPY", date(2024, 1, 31), Decimal("110")),
+        DailyCloseRow("SPY", date(2024, 2, 1), Decimal("101")),
+        DailyCloseRow("SPY", date(2024, 2, 2), Decimal("90")),
+        DailyCloseRow("SPY", date(2024, 2, 5), Decimal("89")),
+        DailyCloseRow("SPY", date(2024, 2, 6), Decimal("88")),
+        DailyCloseRow("SPY", date(2024, 2, 7), Decimal("87")),
+    ])
+    result = simulate_backtest(
+        input_data=form,
+        calendar_dates=calendar,
+        factor_rows=factor_rows,
+        execution_price_rows=execution_rows,
+        daily_close_rows=daily_rows,
+        benchmark_rows=[
+            BenchmarkValueRow(date(2024, 2, 1), Decimal("110")),
+            BenchmarkValueRow(date(2024, 2, 2), Decimal("90")),
+            BenchmarkValueRow(date(2024, 2, 5), Decimal("89")),
+            BenchmarkValueRow(date(2024, 2, 6), Decimal("88")),
+            BenchmarkValueRow(date(2024, 2, 7), Decimal("87")),
+        ],
+        earliest_available_trade_date=date(2024, 1, 31),
+        transaction_cost_rate=Decimal("0.005"),
+    )
+    assert result.state == PageState.SUCCESS
+    assert any("daily risk_off graduated: 70% factor + 30% safe" in (row.notes or "") for row in result.summary_rows)
+    daily_buys = [row for row in result.fill_rows if row.execution_date == date(2024, 2, 7) and row.action == "BUY"]
+    assert any(row.symbol == "SGOV" for row in daily_buys)
+
+
+def test_graduated_daily_does_not_override_heavier_monthly_hedge() -> None:
+    """이미 partially_hedged(50%) 상태에서 일간 30% 신호가 발동해도 기존 상태 유지"""
+    preset = get_strategy_preset(StrategyPresetId.VALUE_QUALITY)
+    form = make_form(
+        market_timing_overlay=MarketTimingOverlayId.GRADUATED_POSITION_SIZING,
+        start_date=date(2024, 1, 31),
+        end_date=date(2024, 2, 7),
+    )
+    calendar = [date(2024, 1, 31), date(2024, 2, 1), date(2024, 2, 2), date(2024, 2, 5), date(2024, 2, 6), date(2024, 2, 7)]
+    strong = {factor.column: Decimal("2") for factor in preset.factor_specs}
+    factor_rows = [FactorSnapshotRow("AAA", date(2024, 1, 31), 1, strong)]
+    execution_rows = [
+        ExecutionPriceRow("AAA", date(2024, 2, 1), Decimal("10")),
+        ExecutionPriceRow("AAA", date(2024, 2, 7), Decimal("10")),
+        ExecutionPriceRow("SGOV", date(2024, 2, 1), Decimal("100")),
+        ExecutionPriceRow("SGOV", date(2024, 2, 7), Decimal("100")),
+        ExecutionPriceRow("SPY", date(2024, 2, 1), Decimal("99")),
+        ExecutionPriceRow("SPY", date(2024, 2, 7), Decimal("88")),
+    ]
+    daily_rows = [
+        DailyCloseRow("AAA", date(2024, 2, 1), Decimal("10")),
+        DailyCloseRow("AAA", date(2024, 2, 2), Decimal("10")),
+        DailyCloseRow("AAA", date(2024, 2, 5), Decimal("10")),
+        DailyCloseRow("AAA", date(2024, 2, 6), Decimal("10")),
+        DailyCloseRow("AAA", date(2024, 2, 7), Decimal("10")),
+        DailyCloseRow("SGOV", date(2024, 2, 1), Decimal("100")),
+        DailyCloseRow("SGOV", date(2024, 2, 2), Decimal("100")),
+        DailyCloseRow("SGOV", date(2024, 2, 5), Decimal("100")),
+        DailyCloseRow("SGOV", date(2024, 2, 6), Decimal("100")),
+        DailyCloseRow("SGOV", date(2024, 2, 7), Decimal("100")),
+    ]
+    # SMA200 ≈ 100, month-end SPY=99 → between lower(98) and SMA200(100) → 50/50
+    # Then SPY drops below 50-day SMA for 3 days → daily signal fires but should NOT override
+    daily_rows.extend(_make_spy_history(date(2023, 4, 1), 320, Decimal("100"), end_before=date(2024, 1, 31)))
+    daily_rows.extend([
+        DailyCloseRow("SPY", date(2024, 1, 31), Decimal("99")),
+        DailyCloseRow("SPY", date(2024, 2, 1), Decimal("98")),
+        DailyCloseRow("SPY", date(2024, 2, 2), Decimal("90")),
+        DailyCloseRow("SPY", date(2024, 2, 5), Decimal("89")),
+        DailyCloseRow("SPY", date(2024, 2, 6), Decimal("88")),
+        DailyCloseRow("SPY", date(2024, 2, 7), Decimal("87")),
+    ])
+    result = simulate_backtest(
+        input_data=form,
+        calendar_dates=calendar,
+        factor_rows=factor_rows,
+        execution_price_rows=execution_rows,
+        daily_close_rows=daily_rows,
+        benchmark_rows=[
+            BenchmarkValueRow(date(2024, 2, 1), Decimal("99")),
+            BenchmarkValueRow(date(2024, 2, 2), Decimal("90")),
+            BenchmarkValueRow(date(2024, 2, 5), Decimal("89")),
+            BenchmarkValueRow(date(2024, 2, 6), Decimal("88")),
+            BenchmarkValueRow(date(2024, 2, 7), Decimal("87")),
+        ],
+        earliest_available_trade_date=date(2024, 1, 31),
+        transaction_cost_rate=Decimal("0.005"),
+    )
+    assert result.state == PageState.SUCCESS
+    # Monthly 50/50 should be applied
+    assert any("50% factor + 50% safe" in (row.notes or "") for row in result.summary_rows)
+    # Daily signal should NOT add another risk-off action since already partially_hedged
+    assert not any("daily risk_off graduated" in (row.notes or "") for row in result.summary_rows)

@@ -108,6 +108,7 @@ class SimulationResult:
 class OverlaySignal:
     risk_on: bool | None
     facts: list[str]
+    strategy_weight: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -461,6 +462,26 @@ def _evaluate_month_end_overlay_signal(
             return OverlaySignal(risk_on=None, facts=facts)
         return OverlaySignal(risk_on=bool(vt_return > ief_return), facts=[])
 
+    if overlay_id == MarketTimingOverlayId.GRADUATED_POSITION_SIZING:
+        close_value = _close_for("SPY", current_date, history_map, index_map)
+        sma200 = _sma_for("SPY", current_date, 200, history_map, index_map)
+        facts = []
+        if close_value is None:
+            facts.append("SPY 종가가 없습니다.")
+        if sma200 is None:
+            facts.append("SPY 200일선 계산 이력이 부족합니다.")
+        if facts:
+            return OverlaySignal(risk_on=None, facts=facts)
+        upper_bound = sma200 * Decimal("1.02")
+        lower_bound = sma200 * Decimal("0.98")
+        if close_value > upper_bound:
+            return OverlaySignal(risk_on=True, facts=[], strategy_weight=Decimal("1"))
+        if close_value > sma200:
+            return OverlaySignal(risk_on=False, facts=[], strategy_weight=Decimal("0.7"))
+        if close_value >= lower_bound:
+            return OverlaySignal(risk_on=False, facts=[], strategy_weight=Decimal("0.5"))
+        return OverlaySignal(risk_on=False, facts=[], strategy_weight=Decimal("0"))
+
     return OverlaySignal(risk_on=True, facts=[])
 
 
@@ -473,7 +494,10 @@ def _evaluate_daily_risk_off(
     if overlay_id in {MarketTimingOverlayId.NONE}:
         return OverlaySignal(risk_on=True, facts=[])
 
-    if overlay_id == MarketTimingOverlayId.EMERGENCY_BRAKE_ASYMMETRIC:
+    if overlay_id in {
+        MarketTimingOverlayId.EMERGENCY_BRAKE_ASYMMETRIC,
+        MarketTimingOverlayId.GRADUATED_POSITION_SIZING,
+    }:
         close_value = _close_for("SPY", current_date, history_map, index_map)
         sma50 = _sma_for("SPY", current_date, 50, history_map, index_map)
         below_sma_for_3_days = _is_below_sma_for_consecutive_trading_days(
@@ -493,7 +517,11 @@ def _evaluate_daily_risk_off(
             facts.append("SPY 50일선 3거래일 연속 이탈 여부를 계산할 이력이 부족합니다.")
         if facts:
             return OverlaySignal(risk_on=None, facts=facts)
-        return OverlaySignal(risk_on=not bool(below_sma_for_3_days), facts=[])
+        if bool(below_sma_for_3_days):
+            if overlay_id == MarketTimingOverlayId.GRADUATED_POSITION_SIZING:
+                return OverlaySignal(risk_on=False, facts=[], strategy_weight=Decimal("0.7"))
+            return OverlaySignal(risk_on=False, facts=[])
+        return OverlaySignal(risk_on=True, facts=[])
 
     return _evaluate_month_end_overlay_signal(overlay_id, current_date, history_map, index_map)
 
@@ -534,6 +562,29 @@ def _safe_asset_allocations(input_data: BacktestFormInput) -> tuple[TargetAlloca
         TargetAllocation(symbol=symbol.value, target_weight=weight / Decimal("100"))
         for symbol, weight in input_data.safe_asset_allocations()
     )
+
+
+def _build_blended_allocations(
+    factor_symbols: list[str],
+    safe_asset_allocations: tuple[TargetAllocation, ...],
+    strategy_weight: Decimal,
+) -> tuple[TargetAllocation, ...]:
+    """전략자산과 안전자산을 strategy_weight 비율로 혼합한 TargetAllocation을 생성합니다.
+
+    strategy_weight=1.0 → 100% 전략자산
+    strategy_weight=0.7 → 70% 전략자산 + 30% 안전자산
+    strategy_weight=0.0 → 100% 안전자산
+    """
+    allocations: list[TargetAllocation] = []
+    if strategy_weight > 0 and factor_symbols:
+        factor_weight_each = strategy_weight / Decimal(len(factor_symbols))
+        for symbol in factor_symbols:
+            allocations.append(TargetAllocation(symbol=symbol, target_weight=factor_weight_each))
+    safe_weight = Decimal("1") - strategy_weight
+    if safe_weight > 0:
+        for sa in safe_asset_allocations:
+            allocations.append(TargetAllocation(symbol=sa.symbol, target_weight=sa.target_weight * safe_weight))
+    return tuple(allocations)
 
 
 def _build_warning_events(
@@ -1202,6 +1253,62 @@ def simulate_backtest(
                     )
                 continue
 
+            if input_data.market_timing_overlay == MarketTimingOverlayId.GRADUATED_POSITION_SIZING:
+                sw = month_signal.strategy_weight
+                if sw is not None and selected_rows:
+                    factor_symbols = [row.symbol for row in selected_rows]
+                    blended = _build_blended_allocations(factor_symbols, safe_asset_allocations, sw)
+                    blended_summary = _allocation_summary(blended, as_percent=True)
+                    if sw == Decimal("1"):
+                        pending_action = PendingAction(
+                            action_type="target",
+                            signal_date=current_date,
+                            execution_date=execution_date,
+                            target_allocations=blended,
+                            note="month-end graduated: 100% factor",
+                            resulting_state="invested_in_factor",
+                        )
+                    elif sw == Decimal("0"):
+                        pending_action = PendingAction(
+                            action_type="target",
+                            signal_date=current_date,
+                            execution_date=execution_date,
+                            target_allocations=safe_asset_allocations,
+                            note=f"month-end graduated: 100% safe -> {safe_asset_summary}",
+                            resulting_state="parked_in_safe_asset",
+                        )
+                    else:
+                        sw_pct = int(sw * 100)
+                        safe_pct = 100 - sw_pct
+                        pending_action = PendingAction(
+                            action_type="target",
+                            signal_date=current_date,
+                            execution_date=execution_date,
+                            target_allocations=blended,
+                            note=f"month-end graduated: {sw_pct}% factor + {safe_pct}% safe",
+                            resulting_state="partially_hedged",
+                        )
+                elif sw is not None and sw == Decimal("0"):
+                    pending_action = PendingAction(
+                        action_type="target",
+                        signal_date=current_date,
+                        execution_date=execution_date,
+                        target_allocations=safe_asset_allocations,
+                        note=f"month-end graduated: 100% safe -> {safe_asset_summary}",
+                        resulting_state="parked_in_safe_asset",
+                    )
+                elif sw is not None and not selected_rows and portfolio_state in {"invested_in_factor", "partially_hedged"}:
+                    quality_flags.add("월말 재진입 조건은 충족했지만 해당 월 실행 가능한 팩터 바스켓이 없어 기존 포지션을 유지했습니다.")
+                    pending_action = PendingAction(
+                        action_type="hold",
+                        signal_date=current_date,
+                        execution_date=execution_date,
+                        target_allocations=tuple(),
+                        note="month-end graduated: hold (no executable basket)",
+                        resulting_state=portfolio_state,
+                    )
+                continue
+
             if portfolio_state == "parked_in_safe_asset":
                 if month_signal.risk_on is True and selected_rows:
                     pending_action = PendingAction(
@@ -1255,7 +1362,7 @@ def simulate_backtest(
 
         if (
             input_data.market_timing_overlay != MarketTimingOverlayId.NONE
-            and portfolio_state == "invested_in_factor"
+            and portfolio_state in {"invested_in_factor", "partially_hedged"}
         ):
             daily_signal = _evaluate_daily_risk_off(input_data.market_timing_overlay, current_date, history_map, index_map)
             if daily_signal.risk_on is None:
@@ -1263,14 +1370,38 @@ def simulate_backtest(
             if daily_signal.risk_on is False:
                 execution_date = next_date_by_date.get(current_date)
                 if execution_date is not None:
-                    pending_action = PendingAction(
-                        action_type="target",
-                        signal_date=current_date,
-                        execution_date=execution_date,
-                        target_allocations=safe_asset_allocations,
-                        note=f"daily risk_off: factor basket -> {safe_asset_summary}",
-                        resulting_state="parked_in_safe_asset",
-                    )
+                    if (
+                        input_data.market_timing_overlay == MarketTimingOverlayId.GRADUATED_POSITION_SIZING
+                        and daily_signal.strategy_weight is not None
+                    ):
+                        daily_sw = daily_signal.strategy_weight
+                        daily_safe_pct = int((Decimal("1") - daily_sw) * 100)
+                        if portfolio_state == "partially_hedged":
+                            pass
+                        else:
+                            factor_symbols_for_daily = [
+                                symbol for symbol in sorted(set(gross_positions) | set(net_positions))
+                                if symbol not in {sa.symbol for sa in safe_asset_allocations}
+                            ]
+                            if factor_symbols_for_daily:
+                                blended = _build_blended_allocations(factor_symbols_for_daily, safe_asset_allocations, daily_sw)
+                                pending_action = PendingAction(
+                                    action_type="target",
+                                    signal_date=current_date,
+                                    execution_date=execution_date,
+                                    target_allocations=blended,
+                                    note=f"daily risk_off graduated: {int(daily_sw * 100)}% factor + {daily_safe_pct}% safe",
+                                    resulting_state="partially_hedged",
+                                )
+                    else:
+                        pending_action = PendingAction(
+                            action_type="target",
+                            signal_date=current_date,
+                            execution_date=execution_date,
+                            target_allocations=safe_asset_allocations,
+                            note=f"daily risk_off: factor basket -> {safe_asset_summary}",
+                            resulting_state="parked_in_safe_asset",
+                        )
 
     if first_execution_date is not None and not any(point.benchmark_equity is not None for point in equity_curve):
         quality_flags.add("SPY 첫 체결일 기준값이 없어 이번 실행에서는 비교선을 그리지 못했습니다.")
