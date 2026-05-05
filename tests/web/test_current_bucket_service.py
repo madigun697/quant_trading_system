@@ -124,7 +124,7 @@ def test_build_context_keeps_stock_bucket_visible_during_risk_off() -> None:
     ]
     repo.daily_close_rows.extend(
         DailyCloseRow("SPY", date(2024, 1, 1) + timedelta(days=index), Decimal("100"))
-        for index in range(59)
+        for index in range(57)
     )
     repo.daily_close_rows.extend(
         [

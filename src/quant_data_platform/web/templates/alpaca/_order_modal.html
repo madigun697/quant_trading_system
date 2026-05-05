@@ -1,0 +1,105 @@
+{# 일괄 주문 모달 #}
+<div id="alpaca-order-modal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="modal-title" hidden>
+  <div class="modal-box">
+    <div class="modal-header">
+      <h2 id="modal-title">일괄 주문</h2>
+      <button class="modal-close" type="button" onclick="closeOrderModal()" aria-label="닫기">✕</button>
+    </div>
+
+    <div class="modal-body">
+      <p class="modal-desc">
+        주문할 종목을 입력하세요. 시장가(Market Order)로 즉시 주문이 실행됩니다.<br>
+        <strong>금액(Notional)</strong> 방식은 DAY 주문만 지원합니다.
+      </p>
+
+      {# 전역 설정 #}
+      <div class="order-global-settings">
+        <div class="form-row">
+          <label class="form-label" for="order-default-side">기본 방향</label>
+          <select id="order-default-side" class="form-select form-select--sm">
+            <option value="buy">매수 (BUY)</option>
+            <option value="sell">매도 (SELL)</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label class="form-label" for="order-default-type">기본 주문 방식</label>
+          <select id="order-default-type" class="form-select form-select--sm" onchange="updateOrderTypeHeaders()">
+            <option value="notional">금액 (Notional $)</option>
+            <option value="qty">수량 (Qty)</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label class="form-label" for="order-default-amount">기본 금액/수량</label>
+          <input id="order-default-amount" type="number" class="form-input form-input--sm" min="0" step="any" placeholder="예) 1000">
+        </div>
+      </div>
+
+      {# 주문 행 테이블 #}
+      <div class="table-wrap">
+        <table id="order-rows-table">
+          <thead>
+            <tr>
+              <th>Symbol</th>
+              <th>방향</th>
+              <th id="order-amount-header">금액 ($)</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="order-rows-body">
+            {# JS가 행을 동적으로 추가 #}
+          </tbody>
+        </table>
+      </div>
+
+      <div class="order-row-actions">
+        <button class="btn btn--ghost btn--sm" type="button" onclick="addOrderRow()">＋ 종목 추가</button>
+        <button class="btn btn--ghost btn--sm" type="button" onclick="applyDefaultsToAllRows()">기본값 적용</button>
+        <button class="btn btn--ghost btn--sm" type="button" onclick="clearOrderRows()">전체 초기화</button>
+      </div>
+
+      {# 심볼 목록 붙여넣기 #}
+      <details class="paste-section">
+        <summary>종목 목록 일괄 입력</summary>
+        <div class="paste-body">
+          <textarea
+            id="order-paste-symbols"
+            class="form-textarea"
+            rows="3"
+            placeholder="쉼표 또는 줄바꿈으로 구분하여 입력&#10;예) AAPL, MSFT, NVDA"
+          ></textarea>
+          <button class="btn btn--ghost btn--sm" type="button" onclick="pasteSymbols()">행으로 추가</button>
+        </div>
+      </details>
+
+      {# 결과 영역 #}
+      <div id="order-result-area" hidden>
+        <div class="panel-header panel-header--tight">
+          <h3>주문 결과</h3>
+        </div>
+        <div id="order-result-summary" class="order-result-summary"></div>
+        <div class="table-wrap">
+          <table id="order-result-table">
+            <thead>
+              <tr>
+                <th>Symbol</th>
+                <th>방향</th>
+                <th>금액/수량</th>
+                <th>주문 ID</th>
+                <th>상태</th>
+                <th>오류</th>
+              </tr>
+            </thead>
+            <tbody id="order-result-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-footer">
+      <button class="btn btn--secondary" type="button" onclick="closeOrderModal()">닫기</button>
+      <button id="order-submit-btn" class="btn btn--primary" type="button" onclick="submitOrders()">
+        주문 실행
+      </button>
+    </div>
+  </div>
+</div>

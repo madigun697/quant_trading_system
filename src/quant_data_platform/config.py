@@ -26,6 +26,10 @@ class Settings(BaseSettings):
     fred_api_key: str | None = Field(default=None, alias="FRED_API_KEY")
     sec_user_agent: str | None = Field(default=None, alias="SEC_USER_AGENT")
 
+    alpaca_api_key: str | None = Field(default=None, alias="ALPACA_API_KEY")
+    alpaca_secret_key: str | None = Field(default=None, alias="ALPACA_SECRET_KEY")
+    alpaca_paper: bool = Field(default=True, alias="ALPACA_PAPER")
+
     prototype_cohort: str = Field(default="prototype", alias="PROTOTYPE_COHORT")
     default_cohort: str = Field(default="us_liquidity_700_v1", alias="DEFAULT_COHORT")
     universe_buffer_cohort: str = Field(default="us_liquidity_900_buffer_v1", alias="UNIVERSE_BUFFER_COHORT")

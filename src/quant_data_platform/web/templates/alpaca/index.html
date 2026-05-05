@@ -1,0 +1,181 @@
+{% extends "base.html" %}
+
+{% block content %}
+<main class="backtest-page alpaca-page">
+
+  {# ── 헤더 ── #}
+  <section class="hero-card">
+    <div class="hero-copy">
+      <p class="eyebrow">Alpaca Paper Trading</p>
+      <h1>페이퍼 트레이딩 포트폴리오</h1>
+      <p class="hero-description">Alpaca 페이퍼 계좌의 현황을 실시간으로 확인하고 일괄 주문을 실행합니다.</p>
+    </div>
+    <div class="hero-rule">
+      <span>계좌 유형</span>
+      <strong>Paper Trading (모의투자)</strong>
+    </div>
+  </section>
+
+  <section class="workspace-grid workspace-grid--full">
+    <section class="result-panel" aria-live="polite">
+
+      {% if state == "error" %}
+      {# ── 오류 상태 ── #}
+      <section class="status-state panel-card">
+        <h2>Alpaca 연결에 문제가 있습니다</h2>
+        <p>{{ error_message }}</p>
+      </section>
+
+      {% elif state == "ok" %}
+
+      {# ── 계좌 요약 KPI ── #}
+      <section class="panel-card summary-grid">
+        <article class="summary-card">
+          <span class="kpi-label">포트폴리오 가치</span>
+          <strong>{{ account.portfolio_value }}</strong>
+          <p>현금 + 포지션 시장가치</p>
+        </article>
+        <article class="summary-card">
+          <span class="kpi-label">현금 잔고</span>
+          <strong>{{ account.cash }}</strong>
+          <p>매수 가능 현금</p>
+        </article>
+        <article class="summary-card">
+          <span class="kpi-label">매수여력</span>
+          <strong>{{ account.buying_power }}</strong>
+          <p>당일 매수 가능 금액</p>
+        </article>
+        <article class="summary-card">
+          <span class="kpi-label">미실현 손익</span>
+          <strong class="kpi-value--{{ account.unrealized_plpc_class }}">
+            {{ account.unrealized_pl }} ({{ account.unrealized_plpc }})
+          </strong>
+          <p>전체 포지션 합산</p>
+        </article>
+      </section>
+
+      {# ── 액션 버튼 ── #}
+      <div class="panel-actions">
+        <button
+          id="alpaca-order-modal-open"
+          class="btn btn--primary"
+          type="button"
+          onclick="openOrderModal()"
+        >
+          ＋ 일괄 주문
+        </button>
+        <button
+          class="btn btn--secondary"
+          type="button"
+          onclick="location.reload()"
+        >
+          ↻ 새로고침
+        </button>
+      </div>
+
+      {# ── 현재 포지션 ── #}
+      <section class="panel-card">
+        <div class="panel-header panel-header--tight">
+          <h2>현재 포지션</h2>
+          <p>보유 종목 {{ position_count }}개 — 시장 가치 기준 내림차순</p>
+        </div>
+        {% if positions %}
+        <div class="table-wrap">
+          <table id="alpaca-positions-table">
+            <thead>
+              <tr>
+                <th>Symbol</th>
+                <th>수량</th>
+                <th>평균단가</th>
+                <th>현재가</th>
+                <th>시장가치</th>
+                <th>미실현 손익</th>
+                <th>수익률</th>
+                <th>비중</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for pos in positions %}
+              <tr>
+                <td><strong>{{ pos.symbol }}</strong></td>
+                <td>{{ pos.qty }}</td>
+                <td>{{ pos.avg_entry_price }}</td>
+                <td>{{ pos.current_price }}</td>
+                <td>{{ pos.market_value }}</td>
+                <td class="kpi-value--{{ pos.unrealized_plpc_class }}">{{ pos.unrealized_pl }}</td>
+                <td class="kpi-value--{{ pos.unrealized_plpc_class }}">{{ pos.unrealized_plpc }}</td>
+                <td>{{ pos.weight_pct }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% else %}
+        <p class="empty-hint">현재 보유 포지션이 없습니다.</p>
+        {% endif %}
+      </section>
+
+      {# ── 최근 주문 내역 ── #}
+      <section class="panel-card">
+        <div class="panel-header panel-header--tight">
+          <h2>최근 주문 내역</h2>
+          <p>최근 50건</p>
+        </div>
+        {% if orders %}
+        <div class="table-wrap">
+          <table id="alpaca-orders-table">
+            <thead>
+              <tr>
+                <th>주문 ID</th>
+                <th>Symbol</th>
+                <th>구분</th>
+                <th>수량 / 금액</th>
+                <th>체결 수량</th>
+                <th>체결 평균가</th>
+                <th>상태</th>
+                <th>접수 시각</th>
+                <th>체결 시각</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for o in orders %}
+              <tr>
+                <td class="mono text-sm">{{ o.order_id }}</td>
+                <td><strong>{{ o.symbol }}</strong></td>
+                <td>
+                  <span class="side-pill side-pill--{{ o.side }}">{{ o.side_label }}</span>
+                </td>
+                <td>{{ o.qty if o.qty != '-' else o.notional }}</td>
+                <td>{{ o.filled_qty }}</td>
+                <td>{{ o.filled_avg_price }}</td>
+                <td><span class="status-badge {{ o.status_class }}">{{ o.status }}</span></td>
+                <td class="text-sm">{{ o.submitted_at }}</td>
+                <td class="text-sm">{{ o.filled_at }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% else %}
+        <p class="empty-hint">주문 내역이 없습니다.</p>
+        {% endif %}
+      </section>
+
+      {% else %}
+      {# ── 초기 상태 (이 페이지는 로드 즉시 데이터를 가져오므로 거의 보이지 않음) ── #}
+      <section class="empty-state panel-card">
+        <h2>데이터를 불러오는 중입니다…</h2>
+      </section>
+      {% endif %}
+
+    </section>
+  </section>
+
+</main>
+
+{# ══════════════════════════════════════════════════════════════════════ #}
+{# 일괄 주문 모달                                                         #}
+{# ══════════════════════════════════════════════════════════════════════ #}
+{% include "alpaca/_order_modal.html" %}
+
+{% endblock %}

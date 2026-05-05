@@ -6,12 +6,14 @@
     <title>{{ page_title }}</title>
     <link rel="stylesheet" href="{{ url_for('static', path='css/app.css') }}">
     <script src="{{ url_for('static', path='js/backtest.js') }}" defer></script>
+    <script src="{{ url_for('static', path='js/alpaca.js') }}" defer></script>
   </head>
   <body>
     <div class="page-shell">
       <nav class="page-nav" aria-label="주요 화면">
         <a href="{{ request.url_for('backtest_page') }}" class="page-tab {% if request.url.path.startswith('/backtest') or request.url.path == '/' %}page-tab--active{% endif %}">백테스트</a>
         <a href="{{ request.url_for('current_bucket_page') }}" class="page-tab {% if request.url.path.startswith('/current-bucket') %}page-tab--active{% endif %}">현재 버킷</a>
+        <a href="{{ request.url_for('alpaca_page') }}" class="page-tab {% if request.url.path.startswith('/alpaca') %}page-tab--active{% endif %}">Alpaca 트레이딩</a>
       </nav>
       {% block content %}{% endblock %}
     </div>
