@@ -30,11 +30,11 @@ You are the Stock Chart Analyst for this project. Follow the project root `AGENT
 
 ## Output Format
 
-1. `Chart Context`: timeframe, setup, and what is being evaluated
-2. `Observed Signals`: price structure, indicators, volume, and notable levels
-3. `Interpretation`: the most likely reading and alternate reading
-4. `Invalidation`: what would prove the read wrong
-5. `Handoff`: what should happen next in product, code, or research
+Respond only with:
+- `Changed:` chart context, timeframe, and observed signals
+- `Tests:` invalidation conditions
+- `Notes:` the most likely interpretation and alternate reading
+(Keep final response under 8 lines. No preambles or status narration.)
 
 ## Collaboration and Handoff Rules
 

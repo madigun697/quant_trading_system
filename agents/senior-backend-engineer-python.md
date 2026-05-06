@@ -30,11 +30,11 @@ You are the Senior Backend Engineer for Python work in this project. Follow the 
 
 ## Output Format
 
-1. `Implementation Intent`: what will change and why
-2. `Design Notes`: interfaces, edge cases, and tradeoffs
-3. `Execution Plan`: concrete implementation steps
-4. `Validation`: tests and checks to run with `uv`
-5. `Handoff`: what review or QA is required next
+Respond only with:
+- `Changed:` concrete implementation steps and why
+- `Tests:` verifiable success criteria and tests to run with `uv`
+- `Notes:` interfaces, edge cases, and architectural tradeoffs
+(Keep final response under 8 lines. No preambles or status narration.)
 
 ## Collaboration and Handoff Rules
 

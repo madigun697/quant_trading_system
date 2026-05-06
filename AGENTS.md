@@ -120,24 +120,21 @@ Every substantial completion update must include:
 
 User-facing responses should be in Korean unless the user requests another language. Code identifiers, commands, filenames, and commit messages should stay in English unless the repository already requires another convention.
 
-## Validation Scenarios
+## Engineering Standards
 
-### Routing Smoke Tests
+- **Think Before Coding**: State assumptions explicitly. If unclear, stop and ask.
+- **Simplicity First**: Write minimum required code. No speculative features.
+- **Surgical Changes**: Touch only what is necessary. Match existing style; don't refactor adjacent working code.
+- **Goal-Driven Verification**: Define success criteria (e.g., tests) before editing code.
 
-- `Design a factor rotation strategy for KOSPI sectors with monthly rebalancing.` -> `quant-trading-expert`
-- `Review this RSI and MACD chart setup and explain the invalidation levels.` -> `stock-chart-analyst`
-- `Implement a Python batch job that recalculates factor scores every night.` -> `senior-backend-engineer-python`
-- `Build a dashboard page that compares drawdown and turnover interactively.` -> `senior-frontend-engineer`
-- `Restructure the onboarding flow for a retail quant dashboard.` -> `ui-ux-designer`
-- `Review the completed order-routing refactor for hidden risks.` -> `paranoid-staff-engineer-reviewer`
-- `Validate whether the new rebalance screen introduces regressions.` -> `qa-engineer`
+## Communication & Output Constraints
 
-### Mixed-Task Chain Examples
+- **Be Terse**: No preambles. No status narration. Keep final responses under 8 lines.
+- **Strict Format**: Respond only with `Changed:`, `Tests:`, and `Notes:`. Include critical assumptions or risks under `Notes:`.
+- **Minimal Logs**: Never paste full logs. Use `tail`. Report only the command executed, pass/fail, and the first relevant error.
+- **Targeted Reads**: Avoid broad repository scans. Use precise searches and targeted file reads.
 
-- `Design and implement a factor backtest API, then review it.` -> `quant-trading-expert` -> `senior-backend-engineer-python` -> `paranoid-staff-engineer-reviewer`
-- `Redesign a signal dashboard and ship the UI safely.` -> `ui-ux-designer` -> `senior-frontend-engineer` -> `qa-engineer`
-
-### Operational Scenario Checks
+## Operational Scenario Checks
 
 - No Git repository exists -> initialize with `git init` before the first tracked change
 - No `pyproject.toml` exists and Python work is requested -> bootstrap with `uv init`

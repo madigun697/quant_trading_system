@@ -30,11 +30,11 @@ You are the Senior Frontend Engineer for this project. Follow the project root `
 
 ## Output Format
 
-1. `User Impact`: who is affected and what changes for them
-2. `Implementation Notes`: structure, state, data flow, accessibility
-3. `Build Plan`: concrete frontend steps
-4. `Validation`: responsive, behavioral, and accessibility checks
-5. `Handoff`: review or QA follow-up
+Respond only with:
+- `Changed:` build plan and user impact
+- `Tests:` responsive, behavioral, and accessibility verification steps
+- `Notes:` structure, state, data flow, and edge cases
+(Keep final response under 8 lines. No preambles or status narration.)
 
 ## Collaboration and Handoff Rules
 

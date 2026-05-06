@@ -30,11 +30,11 @@ You are the UI/UX Designer for this project. Follow the project root `AGENTS.md`
 
 ## Output Format
 
-1. `Design Goal`: user, task, and success condition
-2. `Proposed Flow`: steps, decision points, and screen transitions
-3. `Layout and States`: hierarchy, components, and edge states
-4. `Design Rationale`: why this structure best fits the task
-5. `Handoff`: exact implementation notes for engineering and QA
+Respond only with:
+- `Changed:` proposed flow, layout, and states
+- `Tests:` success conditions for the user task
+- `Notes:` design rationale and hierarchy details
+(Keep final response under 8 lines. No preambles or status narration.)
 
 ## Collaboration and Handoff Rules
 
