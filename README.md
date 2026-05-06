@@ -24,6 +24,9 @@
 - `SEC_USER_AGENT`
   - 예시: `YourName your@email.com`
   - 참고: <https://www.sec.gov/search-filings/edgar-application-programming-interfaces>
+- `ALPACA_API_KEY`, `ALPACA_SECRET_KEY`
+  - 발급: <https://alpaca.markets/>
+  - 용도: Paper Trading 대시보드 연동
 - `yfinance`
   - 별도 API 키는 없습니다.
   - 용도: 장기 history 백필 전용
@@ -66,7 +69,7 @@ Docker 구성 검증:
 docker compose config
 ```
 
-## 백테스트 웹 실행
+## 백테스트 및 웹 대시보드
 권장 경로는 Docker입니다.
 
 Docker로 실행:
@@ -75,14 +78,25 @@ Docker로 실행:
 docker compose up -d postgres backtest-web
 ```
 
-- 앱: <http://localhost:8000/backtest>
+- 백테스트: <http://localhost:8000/backtest>
+- 현재 포트폴리오 (Current Bucket): <http://localhost:8000/current_bucket>
+- 모의투자 (Alpaca Paper Trading): <http://localhost:8000/alpaca>
 - readiness: <http://localhost:8000/healthz>
+
+웹 UI 없이 스크립트로 백테스트를 실행할 때는 다음 명령어를 사용합니다:
+
+```bash
+uv run python run_backtest.py
+```
 
 로컬 `uv run`으로 실행할 때는 네이티브 Postgres와 충돌하지 않도록 compose Postgres 포트를 명시적으로 사용합니다.
 
 ```bash
 POSTGRES_HOST=127.0.0.1 POSTGRES_PORT=55432 uv run uvicorn quant_data_platform.web.app:app --reload
 ```
+
+## 마켓 타이밍 전략
+`mkt_timing_strategy.md`에 기술된 마켓 타이밍(예: 비대칭 이동평균선, 카나리 자산군 신호 등)이 백테스트 엔진에 구현되어 있습니다. 백테스트 시 해당 옵션을 활성화하여 시장 하락기의 수익률 방어 효과를 시뮬레이션할 수 있습니다.
 
 ## DAG
 - `backfill_market_data`
