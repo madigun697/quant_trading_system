@@ -396,6 +396,7 @@ def form_values_from_model(form: BacktestFormInput) -> dict[str, str]:
         "safe_asset_weight_tlt": _format_weight_percent(form.safe_asset_weight_tlt),
         "safe_asset_weight_gld": _format_weight_percent(form.safe_asset_weight_gld),
         "safe_asset_weight_xle": _format_weight_percent(form.safe_asset_weight_xle),
+        "safe_asset_weight_shy": _format_weight_percent(form.safe_asset_weight_shy),
         "start_date": form.start_date.isoformat(),
         "end_date": form.end_date.isoformat(),
         "initial_capital": str(form.initial_capital),
@@ -414,6 +415,7 @@ def current_bucket_form_values_from_model(form: CurrentBucketFormInput) -> dict[
         "safe_asset_weight_tlt": _format_weight_percent(form.safe_asset_weight_tlt),
         "safe_asset_weight_gld": _format_weight_percent(form.safe_asset_weight_gld),
         "safe_asset_weight_xle": _format_weight_percent(form.safe_asset_weight_xle),
+        "safe_asset_weight_shy": _format_weight_percent(form.safe_asset_weight_shy),
         "investable_capital": str(form.investable_capital),
         "top_n": str(form.top_n),
     }
@@ -429,6 +431,7 @@ def form_values_from_raw(data: dict[str, Any]) -> dict[str, str]:
         "safe_asset_weight_tlt": str(data.get("safe_asset_weight_tlt", "0")),
         "safe_asset_weight_gld": str(data.get("safe_asset_weight_gld", "0")),
         "safe_asset_weight_xle": str(data.get("safe_asset_weight_xle", "0")),
+        "safe_asset_weight_shy": str(data.get("safe_asset_weight_shy", "0")),
         "start_date": str(data.get("start_date", default_start_date().isoformat())),
         "end_date": str(data.get("end_date", date.today().isoformat())),
         "initial_capital": str(data.get("initial_capital", "100000")),
@@ -455,6 +458,7 @@ def current_bucket_form_values_from_raw(data: dict[str, Any]) -> dict[str, str]:
         "safe_asset_weight_tlt": str(data.get("safe_asset_weight_tlt", "0")),
         "safe_asset_weight_gld": str(data.get("safe_asset_weight_gld", "0")),
         "safe_asset_weight_xle": str(data.get("safe_asset_weight_xle", "0")),
+        "safe_asset_weight_shy": str(data.get("safe_asset_weight_shy", "0")),
         "investable_capital": str(data.get("investable_capital", "100000")),
         "top_n": str(data.get("top_n", "10")),
     }

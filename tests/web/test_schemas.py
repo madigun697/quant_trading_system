@@ -6,7 +6,14 @@ from decimal import Decimal
 import pytest
 from pydantic import ValidationError
 
-from quant_data_platform.web.schemas import BacktestFormInput, CurrentBucketFormInput
+from quant_data_platform.web.schemas import (
+    BacktestFormInput,
+    CurrentBucketFormInput,
+    current_bucket_form_values_from_model,
+    current_bucket_form_values_from_raw,
+    form_values_from_model,
+    form_values_from_raw,
+)
 
 
 def test_backtest_form_defaults_to_sgov_100_percent() -> None:
@@ -21,6 +28,7 @@ def test_backtest_form_defaults_to_sgov_100_percent() -> None:
     assert form.safe_asset_weight_tlt == Decimal("0")
     assert form.safe_asset_weight_gld == Decimal("0")
     assert form.safe_asset_weight_xle == Decimal("0")
+    assert form.safe_asset_weight_shy == Decimal("0")
     assert form.safe_asset_summary() == "SGOV 100%"
 
 
@@ -92,7 +100,65 @@ def test_current_bucket_form_defaults_to_sgov_100_percent() -> None:
     assert form.safe_asset_weight_tlt == Decimal("0")
     assert form.safe_asset_weight_gld == Decimal("0")
     assert form.safe_asset_weight_xle == Decimal("0")
+    assert form.safe_asset_weight_shy == Decimal("0")
     assert form.safe_asset_summary() == "SGOV 100%"
+
+
+def test_backtest_form_value_helpers_include_shy_weight() -> None:
+    model_values = form_values_from_model(
+        BacktestFormInput(start_date=date(2024, 1, 1), end_date=date(2024, 1, 2))
+    )
+    raw_values = form_values_from_raw({})
+
+    assert model_values["safe_asset_weight_shy"] == "0"
+    assert raw_values["safe_asset_weight_shy"] == "0"
+
+
+def test_current_bucket_form_value_helpers_include_shy_weight() -> None:
+    model_values = current_bucket_form_values_from_model(CurrentBucketFormInput())
+    raw_values = current_bucket_form_values_from_raw({})
+
+    assert model_values["safe_asset_weight_shy"] == "0"
+    assert raw_values["safe_asset_weight_shy"] == "0"
+
+
+def test_backtest_form_value_helpers_round_trip_non_default_shy_weight() -> None:
+    model_values = form_values_from_model(
+        BacktestFormInput(
+            start_date=date(2024, 1, 1),
+            end_date=date(2024, 1, 2),
+            safe_asset_weight_sgov=Decimal("75"),
+            safe_asset_weight_shy=Decimal("25"),
+        )
+    )
+    raw_values = form_values_from_raw({"safe_asset_weight_sgov": "75", "safe_asset_weight_shy": "25"})
+
+    assert model_values["safe_asset_weight_shy"] == "25"
+    assert raw_values["safe_asset_weight_shy"] == "25"
+
+
+def test_current_bucket_form_value_helpers_round_trip_non_default_shy_weight() -> None:
+    model_values = current_bucket_form_values_from_model(
+        CurrentBucketFormInput(safe_asset_weight_sgov=Decimal("75"), safe_asset_weight_shy=Decimal("25"))
+    )
+    raw_values = current_bucket_form_values_from_raw({"safe_asset_weight_sgov": "75", "safe_asset_weight_shy": "25"})
+
+    assert model_values["safe_asset_weight_shy"] == "25"
+    assert raw_values["safe_asset_weight_shy"] == "25"
+
+
+def test_backtest_form_raw_helper_maps_legacy_shy_symbol() -> None:
+    raw_values = form_values_from_raw({"safe_asset_symbol": "SHY"})
+
+    assert raw_values["safe_asset_weight_shy"] == "100"
+    assert raw_values["safe_asset_weight_sgov"] == "0"
+
+
+def test_current_bucket_form_raw_helper_maps_legacy_shy_symbol() -> None:
+    raw_values = current_bucket_form_values_from_raw({"safe_asset_symbol": "SHY"})
+
+    assert raw_values["safe_asset_weight_shy"] == "100"
+    assert raw_values["safe_asset_weight_sgov"] == "0"
 
 
 def test_current_bucket_form_accepts_legacy_safe_asset_symbol() -> None:
