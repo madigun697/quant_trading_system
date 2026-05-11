@@ -272,7 +272,7 @@ def test_build_context_wraps_runtime_database_errors() -> None:
     context = service.build_context(form)
     assert context.state == PageState.ERROR
     assert context.http_status_code == 503
-    assert "POSTGRES_HOST=127.0.0.1 POSTGRES_PORT=55432" in (context.error_message or "")
+    assert "INFRA_HOST=<infra-host> POSTGRES_PORT=<infra-port>" in (context.error_message or "")
 
 
 def test_build_context_surfaces_query_errors_without_masking_as_unreachable() -> None:

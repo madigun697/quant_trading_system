@@ -36,12 +36,14 @@
 ## 빠른 시작
 1. `cp .env.example .env`
 2. `.env`에 API 키와 User-Agent를 입력
-3. `docker compose up --build airflow-init`
-4. `docker compose up -d postgres minio pgadmin airflow-webserver airflow-scheduler`
-5. Airflow UI 접속: <http://localhost:8080>
-6. MinIO Console 접속: <http://localhost:9001>
-7. pgAdmin 접속: <http://localhost:5050>
-8. PostgreSQL host 포트: `localhost:55432`
+3. 필요하면 `.env`의 `INFRA_HOST`만 원하는 infra IP/host로 변경
+4. `docker compose up --build airflow-init`
+5. `docker compose up -d postgres minio pgadmin airflow-webserver airflow-scheduler`
+6. Airflow UI 접속: `http://${INFRA_HOST}:8080`
+7. MinIO API 접속: `http://${INFRA_HOST}:9000`
+8. MinIO Console 접속: `http://${INFRA_HOST}:9001`
+9. pgAdmin 접속: `http://${INFRA_HOST}:5050`
+10. PostgreSQL host 포트: `${INFRA_HOST}:55432`
 
 pgAdmin 기본 로그인 값:
 
@@ -78,10 +80,10 @@ Docker로 실행:
 docker compose up -d postgres backtest-web
 ```
 
-- 백테스트: <http://localhost:8000/backtest>
-- 현재 포트폴리오 (Current Bucket): <http://localhost:8000/current_bucket>
-- 모의투자 (Alpaca Paper Trading): <http://localhost:8000/alpaca>
-- readiness: <http://localhost:8000/healthz>
+- 백테스트: `http://${INFRA_HOST}:8000/backtest`
+- 현재 포트폴리오 (Current Bucket): `http://${INFRA_HOST}:8000/current_bucket`
+- 모의투자 (Alpaca Paper Trading): `http://${INFRA_HOST}:8000/alpaca`
+- readiness: `http://${INFRA_HOST}:8000/healthz`
 
 웹 UI 없이 스크립트로 백테스트를 실행할 때는 다음 명령어를 사용합니다:
 
@@ -89,10 +91,16 @@ docker compose up -d postgres backtest-web
 uv run python run_backtest.py
 ```
 
-로컬 `uv run`으로 실행할 때는 네이티브 Postgres와 충돌하지 않도록 compose Postgres 포트를 명시적으로 사용합니다.
+로컬 `uv run` 또는 외부 infra IP로 실행할 때는 `INFRA_HOST` 하나로 연결 대상을 제어합니다. 기본값은 `localhost`입니다.
 
 ```bash
-POSTGRES_HOST=127.0.0.1 POSTGRES_PORT=55432 uv run uvicorn quant_data_platform.web.app:app --reload
+INFRA_HOST=localhost POSTGRES_PORT=55432 uv run uvicorn quant_data_platform.web.app:app --reload
+```
+
+특정 infra 서버를 바라보려면 예를 들어 다음처럼 실행합니다.
+
+```bash
+INFRA_HOST=192.168.0.10 POSTGRES_PORT=5432 uv run uvicorn quant_data_platform.web.app:app --reload
 ```
 
 ## 마켓 타이밍 전략
@@ -125,13 +133,13 @@ POSTGRES_HOST=127.0.0.1 POSTGRES_PORT=55432 uv run uvicorn quant_data_platform.w
 최근 mart coverage를 점검할 때는 아래 명령을 사용합니다.
 
 ```bash
-POSTGRES_HOST=127.0.0.1 POSTGRES_PORT=55432 uv run python -m quant_data_platform.cli audit-mart-coverage --cohort us_liquidity_700_v1
+INFRA_HOST=localhost POSTGRES_PORT=55432 uv run python -m quant_data_platform.cli audit-mart-coverage --cohort us_liquidity_700_v1
 ```
 
 JSON이 필요하면:
 
 ```bash
-POSTGRES_HOST=127.0.0.1 POSTGRES_PORT=55432 uv run python -m quant_data_platform.cli audit-mart-coverage --cohort us_liquidity_700_v1 --format json
+INFRA_HOST=localhost POSTGRES_PORT=55432 uv run python -m quant_data_platform.cli audit-mart-coverage --cohort us_liquidity_700_v1 --format json
 ```
 
 리포트에는 아래 내용이 포함됩니다.
@@ -164,15 +172,15 @@ docker compose exec airflow-webserver airflow dags trigger daily_incremental_pip
 CLI 경로가 필요할 때는 `--full-universe` 플래그를 사용할 수 있습니다.
 
 ```bash
-POSTGRES_HOST=127.0.0.1 POSTGRES_PORT=55432 MINIO_ENDPOINT=http://127.0.0.1:9000 uv run python -m quant_data_platform.cli backfill-fundamentals --full-universe --mode full
-POSTGRES_HOST=127.0.0.1 POSTGRES_PORT=55432 MINIO_ENDPOINT=http://127.0.0.1:9000 uv run python -m quant_data_platform.cli backfill-market --full-universe --mode recent
+INFRA_HOST=localhost POSTGRES_PORT=55432 uv run python -m quant_data_platform.cli backfill-fundamentals --full-universe --mode full
+INFRA_HOST=localhost POSTGRES_PORT=55432 uv run python -m quant_data_platform.cli backfill-market --full-universe --mode recent
 ```
 
 SPY benchmark 백필/일일 갱신 메모:
 
 ```bash
-POSTGRES_HOST=127.0.0.1 POSTGRES_PORT=55432 MINIO_ENDPOINT=http://127.0.0.1:9000 uv run python -m quant_data_platform.cli backfill-market --symbols SPY --mode full
-POSTGRES_HOST=127.0.0.1 POSTGRES_PORT=55432 MINIO_ENDPOINT=http://127.0.0.1:9000 uv run python -m quant_data_platform.cli daily-incremental
+INFRA_HOST=localhost POSTGRES_PORT=55432 uv run python -m quant_data_platform.cli backfill-market --symbols SPY --mode full
+INFRA_HOST=localhost POSTGRES_PORT=55432 uv run python -m quant_data_platform.cli daily-incremental
 ```
 
 - `SUPPORT_MARKET_SYMBOLS` 기본값은 `SPY,VT,IEF,SGOV,JPST,TLT,GLD,XLE`이며, 일반 공통주 유니버스와 별개로 시장 데이터 적재 대상에 항상 병합됩니다.

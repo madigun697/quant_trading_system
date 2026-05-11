@@ -10,6 +10,7 @@ from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
+    infra_host: str = Field(default="localhost", alias="INFRA_HOST")
     postgres_db: str = Field(default="quant", alias="POSTGRES_DB")
     postgres_user: str = Field(default="quant", alias="POSTGRES_USER")
     postgres_password: str = Field(default="quant", alias="POSTGRES_PASSWORD")
@@ -56,6 +57,11 @@ class Settings(BaseSettings):
         if isinstance(value, dict):
             if "SUPPORT_MARKET_SYMBOLS" not in value and "BENCHMARK_MARKET_SYMBOLS" in value:
                 value = {**value, "SUPPORT_MARKET_SYMBOLS": value["BENCHMARK_MARKET_SYMBOLS"]}
+            infra_host = value.get("INFRA_HOST") or value.get("infra_host") or "localhost"
+            if "POSTGRES_HOST" not in value and "postgres_host" not in value:
+                value = {**value, "POSTGRES_HOST": infra_host}
+            if "MINIO_ENDPOINT" not in value and "minio_endpoint" not in value:
+                value = {**value, "MINIO_ENDPOINT": f"http://{infra_host}:9000"}
         return value
 
     @field_validator("support_market_symbols", mode="before")

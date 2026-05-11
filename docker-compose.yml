@@ -51,7 +51,7 @@ services:
     environment:
       AIRFLOW__CORE__EXECUTOR: LocalExecutor
       AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/project/dags
-      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER:-quant}:${POSTGRES_PASSWORD:-quant}@postgres:5432/${POSTGRES_DB:-quant}
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER:-quant}:${POSTGRES_PASSWORD:-quant}@${INFRA_HOST:-localhost}:${POSTGRES_PORT:-55432}/${POSTGRES_DB:-quant}
       AIRFLOW__CORE__LOAD_EXAMPLES: "False"
       AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "True"
       AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY}
@@ -61,11 +61,11 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-quant}
       POSTGRES_USER: ${POSTGRES_USER:-quant}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-quant}
-      POSTGRES_HOST: postgres
-      POSTGRES_PORT: 5432
+      INFRA_HOST: ${INFRA_HOST:-localhost}
+      POSTGRES_HOST: ${INFRA_HOST:-localhost}
+      POSTGRES_PORT: ${POSTGRES_PORT:-55432}
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
-      MINIO_ENDPOINT: http://minio:9000
       MINIO_REGION: ${MINIO_REGION:-us-east-1}
       ALPHAVANTAGE_API_KEY: ${ALPHAVANTAGE_API_KEY:-}
       TIINGO_API_KEY: ${TIINGO_API_KEY:-}
@@ -111,7 +111,7 @@ services:
     environment:
       AIRFLOW__CORE__EXECUTOR: LocalExecutor
       AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/project/dags
-      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER:-quant}:${POSTGRES_PASSWORD:-quant}@postgres:5432/${POSTGRES_DB:-quant}
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER:-quant}:${POSTGRES_PASSWORD:-quant}@${INFRA_HOST:-localhost}:${POSTGRES_PORT:-55432}/${POSTGRES_DB:-quant}
       AIRFLOW__CORE__LOAD_EXAMPLES: "False"
       AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "True"
       AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "True"
@@ -121,11 +121,11 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-quant}
       POSTGRES_USER: ${POSTGRES_USER:-quant}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-quant}
-      POSTGRES_HOST: postgres
-      POSTGRES_PORT: 5432
+      INFRA_HOST: ${INFRA_HOST:-localhost}
+      POSTGRES_HOST: ${INFRA_HOST:-localhost}
+      POSTGRES_PORT: ${POSTGRES_PORT:-55432}
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
-      MINIO_ENDPOINT: http://minio:9000
       MINIO_REGION: ${MINIO_REGION:-us-east-1}
       ALPHAVANTAGE_API_KEY: ${ALPHAVANTAGE_API_KEY:-}
       TIINGO_API_KEY: ${TIINGO_API_KEY:-}
@@ -162,7 +162,7 @@ services:
     environment:
       AIRFLOW__CORE__EXECUTOR: LocalExecutor
       AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/project/dags
-      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER:-quant}:${POSTGRES_PASSWORD:-quant}@postgres:5432/${POSTGRES_DB:-quant}
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER:-quant}:${POSTGRES_PASSWORD:-quant}@${INFRA_HOST:-localhost}:${POSTGRES_PORT:-55432}/${POSTGRES_DB:-quant}
       AIRFLOW__CORE__LOAD_EXAMPLES: "False"
       AIRFLOW_UID: ${AIRFLOW_UID:-50000}
       PYTHONPATH: /opt/airflow/project/src
@@ -170,11 +170,11 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-quant}
       POSTGRES_USER: ${POSTGRES_USER:-quant}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-quant}
-      POSTGRES_HOST: postgres
-      POSTGRES_PORT: 5432
+      INFRA_HOST: ${INFRA_HOST:-localhost}
+      POSTGRES_HOST: ${INFRA_HOST:-localhost}
+      POSTGRES_PORT: ${POSTGRES_PORT:-55432}
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
-      MINIO_ENDPOINT: http://minio:9000
       MINIO_REGION: ${MINIO_REGION:-us-east-1}
       ALPHAVANTAGE_API_KEY: ${ALPHAVANTAGE_API_KEY:-}
       TIINGO_API_KEY: ${TIINGO_API_KEY:-}
@@ -210,8 +210,9 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-quant}
       POSTGRES_USER: ${POSTGRES_USER:-quant}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-quant}
-      POSTGRES_HOST: postgres
-      POSTGRES_PORT: 5432
+      INFRA_HOST: ${INFRA_HOST:-localhost}
+      POSTGRES_HOST: ${INFRA_HOST:-localhost}
+      POSTGRES_PORT: ${POSTGRES_PORT:-55432}
       DEFAULT_COHORT: ${DEFAULT_COHORT:-us_liquidity_700_v1}
     depends_on:
       postgres:

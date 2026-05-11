@@ -370,7 +370,7 @@ class CurrentBucketPageService:
             return (
                 "현재 버킷 데이터베이스에 연결하지 못했습니다. "
                 "Docker 경로라면 `docker compose up -d postgres backtest-web`로 서비스를 띄워 주세요. "
-                "로컬 `uv run` 경로라면 `POSTGRES_HOST=127.0.0.1 POSTGRES_PORT=55432`를 지정해 compose Postgres에 연결해야 합니다."
+                "로컬/원격 infra 경로라면 `INFRA_HOST=<infra-host> POSTGRES_PORT=<infra-port>`를 지정해 대상 PostgreSQL에 연결해야 합니다."
             )
         if readiness.code in {"missing_schema", "missing_relation", "unqueryable_relation", "missing_support_symbol_data"}:
             return (
@@ -383,7 +383,7 @@ class CurrentBucketPageService:
         if readiness.code == "database_unreachable":
             return [
                 "Docker 서비스가 꺼져 있다면 postgres와 backtest-web을 함께 실행해 주세요.",
-                "로컬 실행이라면 POSTGRES_HOST와 POSTGRES_PORT가 compose Postgres를 가리키는지 확인해 주세요.",
+                "로컬 실행이라면 INFRA_HOST와 POSTGRES_PORT가 compose Postgres를 가리키는지 확인해 주세요.",
             ]
         if readiness.code in {"missing_schema", "missing_relation", "unqueryable_relation"}:
             return [

@@ -232,10 +232,10 @@ docker compose up -d postgres minio pgadmin airflow-webserver airflow-scheduler
 
 | 서비스 | URL | 기본 계정 |
 |---|---|---|
-| Airflow UI | http://localhost:8080 | admin / admin |
-| MinIO Console | http://localhost:9001 | minioadmin / minioadmin |
-| pgAdmin | http://localhost:5050 | admin@example.com / admin |
-| PostgreSQL | localhost:5432 | quant / quant (DB: quant) |
+| Airflow UI | http://${INFRA_HOST}:8080 | admin / admin |
+| MinIO Console | http://${INFRA_HOST}:9001 | minioadmin / minioadmin |
+| pgAdmin | http://${INFRA_HOST}:5050 | admin@example.com / admin |
+| PostgreSQL | ${INFRA_HOST}:55432 | quant / quant (DB: quant) |
 
 ### 3.2 파이프라인 작업 (Airflow UI 또는 CLI)
 

@@ -3,10 +3,10 @@ quant_data_platform:
   outputs:
     dev:
       type: postgres
-      host: "{{ env_var('POSTGRES_HOST', 'postgres') }}"
+      host: "{{ env_var('POSTGRES_HOST', env_var('INFRA_HOST', 'localhost')) }}"
       user: "{{ env_var('POSTGRES_USER', 'quant') }}"
       password: "{{ env_var('POSTGRES_PASSWORD', 'quant') }}"
-      port: "{{ env_var('POSTGRES_PORT', '5432') | int }}"
+      port: "{{ env_var('POSTGRES_PORT', '55432') | int }}"
       dbname: "{{ env_var('POSTGRES_DB', 'quant') }}"
       schema: stg
       threads: 4

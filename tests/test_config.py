@@ -15,12 +15,18 @@ def test_postgres_dsn() -> None:
     assert "user=user" in settings.postgres_dsn
 
 
+def test_infra_host_backfills_postgres_and_minio_defaults() -> None:
+    settings = Settings(INFRA_HOST="10.0.0.5")
+    assert settings.postgres_host == "10.0.0.5"
+    assert settings.minio_endpoint == "http://10.0.0.5:9000"
+
+
 def test_universe_defaults() -> None:
     settings = Settings(SUPPORT_MARKET_SYMBOLS=None)
     assert settings.default_cohort == "us_liquidity_700_v1"
     assert settings.universe_buffer_cohort == "us_liquidity_900_buffer_v1"
     assert settings.universe_target_size == 700
-    assert settings.support_market_symbols == ("SPY", "VT", "IEF", "SGOV", "JPST", "TLT", "GLD", "XLE")
+    assert settings.support_market_symbols == ("SPY", "VT", "IEF", "SGOV", "JPST", "TLT", "GLD", "XLE", "SHY")
     assert settings.benchmark_market_symbols == settings.support_market_symbols
 
 
