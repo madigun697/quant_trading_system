@@ -61,9 +61,9 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-quant}
       POSTGRES_USER: ${POSTGRES_USER:-quant}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-quant}
-      INFRA_HOST: ${INFRA_HOST:-localhost}
-      POSTGRES_HOST: ${INFRA_HOST:-localhost}
-      POSTGRES_PORT: ${POSTGRES_PORT:-55432}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      MINIO_ENDPOINT: http://minio:9000
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
       MINIO_REGION: ${MINIO_REGION:-us-east-1}
@@ -121,9 +121,9 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-quant}
       POSTGRES_USER: ${POSTGRES_USER:-quant}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-quant}
-      INFRA_HOST: ${INFRA_HOST:-localhost}
-      POSTGRES_HOST: ${INFRA_HOST:-localhost}
-      POSTGRES_PORT: ${POSTGRES_PORT:-55432}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      MINIO_ENDPOINT: http://minio:9000
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
       MINIO_REGION: ${MINIO_REGION:-us-east-1}
@@ -170,9 +170,9 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-quant}
       POSTGRES_USER: ${POSTGRES_USER:-quant}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-quant}
-      INFRA_HOST: ${INFRA_HOST:-localhost}
-      POSTGRES_HOST: ${INFRA_HOST:-localhost}
-      POSTGRES_PORT: ${POSTGRES_PORT:-55432}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      MINIO_ENDPOINT: http://minio:9000
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
       MINIO_REGION: ${MINIO_REGION:-us-east-1}
@@ -210,9 +210,8 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-quant}
       POSTGRES_USER: ${POSTGRES_USER:-quant}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-quant}
-      INFRA_HOST: ${INFRA_HOST:-localhost}
-      POSTGRES_HOST: ${INFRA_HOST:-localhost}
-      POSTGRES_PORT: ${POSTGRES_PORT:-55432}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
       DEFAULT_COHORT: ${DEFAULT_COHORT:-us_liquidity_700_v1}
     depends_on:
       postgres:
