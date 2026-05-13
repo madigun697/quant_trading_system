@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import logging
 from datetime import UTC, date, datetime
 from typing import Iterable
 
 from requests import HTTPError
 from tenacity import RetryError
+
+logger = logging.getLogger(__name__)
 
 from quant_data_platform.clients.alpha_vantage import (
     AlphaVantageClient,
@@ -311,7 +314,7 @@ def _ingest_tiingo_batch(
         sleep_for_tiingo(settings.tiingo_throttle_seconds)
     except (HTTPError, RetryError) as exc:
         http_error = _unwrap_http_error(exc)
-        if http_error is not None and http_error.response is not None and http_error.response.status_code == 400 and len(symbols) > 1:
+        if http_error is not None and http_error.response is not None and http_error.response.status_code in {400, 403} and len(symbols) > 1:
             midpoint = len(symbols) // 2
             left_stats = _ingest_tiingo_batch(
                 conn=conn,
@@ -337,7 +340,7 @@ def _ingest_tiingo_batch(
                 "symbol_count": left_stats["symbol_count"] + right_stats["symbol_count"],
                 "request_count": left_stats["request_count"] + right_stats["request_count"],
             }
-        if http_error is not None and http_error.response is not None and http_error.response.status_code == 400 and len(symbols) == 1:
+        if http_error is not None and http_error.response is not None and http_error.response.status_code in {400, 403} and len(symbols) == 1:
             return {"price_rows": 0, "action_rows": 0, "symbol_count": 0, "request_count": 1}
         raise
 
@@ -812,8 +815,13 @@ def run_market_backfill(
             price_stats["market_data_fallback"] = 0
         except (HTTPError, RetryError) as exc:
             http_error = _unwrap_http_error(exc)
-            if http_error is None or http_error.response is None or http_error.response.status_code != 429:
+            if http_error is None or http_error.response is None or http_error.response.status_code not in {403, 429}:
                 raise
+            logger.warning(
+                "Tiingo batch request failed (HTTP %s), falling back to yfinance for %d symbols",
+                http_error.response.status_code,
+                len(symbols),
+            )
             price_stats = ingest_yfinance_prices(
                 symbols,
                 start_date=effective_start,

@@ -40,7 +40,7 @@ class Settings(BaseSettings):
     liquidity_discovery_days: int = Field(default=90, alias="LIQUIDITY_DISCOVERY_DAYS")
     tiingo_hourly_request_budget: int = Field(default=50, alias="TIINGO_HOURLY_REQUEST_BUDGET")
     tiingo_monthly_request_budget: int = Field(default=1000, alias="TIINGO_MONTHLY_REQUEST_BUDGET")
-    tiingo_discovery_batch_size: int = Field(default=200, alias="TIINGO_DISCOVERY_BATCH_SIZE")
+    tiingo_discovery_batch_size: int = Field(default=50, alias="TIINGO_DISCOVERY_BATCH_SIZE")
     yfinance_batch_size: int = Field(default=100, alias="YFINANCE_BATCH_SIZE")
     sec_daily_request_budget: int = Field(default=50, alias="SEC_DAILY_REQUEST_BUDGET")
     support_market_symbols: Annotated[tuple[str, ...], NoDecode] = Field(
