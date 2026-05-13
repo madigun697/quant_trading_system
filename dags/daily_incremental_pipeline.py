@@ -53,15 +53,20 @@ def notify_failure(context: dict) -> None:
         except Exception:
             logger.exception("Slack 알림 실패")
 
-    try:
-        from airflow.utils.email import send_email
-        send_email(
-            to=(context.get("params") or {}).get("email", ["admin@example.com"]),
-            subject=f"[Airflow] DAG {dag_id} 태스크 {task_id} 실패",
-            html_content=f"<pre>{msg}</pre>",
-        )
-    except Exception:
-        logger.exception("이메일 알림 실패")
+    from airflow.configuration import conf
+    smtp_host = conf.get("smtp", "smtp_host", fallback="")
+    if smtp_host:
+        try:
+            from airflow.utils.email import send_email
+            send_email(
+                to=(context.get("params") or {}).get("email", ["admin@example.com"]),
+                subject=f"[Airflow] DAG {dag_id} 태스크 {task_id} 실패",
+                html_content=f"<pre>{msg}</pre>",
+            )
+        except Exception:
+            logger.exception("이메일 알림 실패")
+    else:
+        logger.info("SMTP 미설정 — 이메일 알림 건너뜀")
 
 
 @dag(
@@ -127,7 +132,7 @@ def build_daily_incremental_pipeline() -> None:
         task_id="dbt_staging",
         bash_command=(
             f"cd {PROJECT_ROOT} && "
-            f"{DBT_BIN} run --project-dir dbt --profiles-dir {DBT_PROFILES_DIR} --select tag:stg tag:int"
+            f"{DBT_BIN} run --project-dir dbt --profiles-dir {DBT_PROFILES_DIR} --select tag:stg,tag:int"
         ),
         env=dbt_env,
         on_failure_callback=notify_failure,
