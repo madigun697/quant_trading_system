@@ -1,166 +1,135 @@
-# Quant Data Platform Prototype
+# Quant Data Platform
 
-무료 기반 미국 주식 백테스트 데이터 파이프라인 프로토타입입니다.
+An open-source prototype for building a US equity research and backtesting data platform with free or low-cost data sources.
 
-## 스택
-- Sources: `SEC + Alpha Vantage + yfinance + Tiingo + FRED`
-- Storage: `PostgreSQL + MinIO`
-- DB Web UI: `pgAdmin`
-- Transform: `dbt-postgres`
-- Orchestration: `Airflow`
-- Runtime: `Docker Compose`
-- Python packaging/runtime: `uv`
+This project focuses on collecting market, fundamental, macro, and filing data; transforming it into point-in-time research marts; and exposing the results through Airflow, dbt, PostgreSQL, MinIO, and a FastAPI web interface.
 
-## API Key 준비
-아래 값들을 준비합니다.
+> Research and educational use only. This repository does not provide investment advice or a production trading guarantee.
+
+Korean documentation: [README.ko.md](README.ko.md)
+
+## What It Does
+
+- Ingests US equity data from SEC, Alpha Vantage, yfinance, Tiingo, and FRED
+- Stores structured data in PostgreSQL and object data in MinIO
+- Builds dbt staging, intermediate, and mart models for research and backtesting
+- Maintains liquidity-based equity universes and support market symbols such as SPY
+- Runs Airflow DAGs for backfills, universe construction, and daily incremental updates
+- Provides a FastAPI web UI for backtest review, current portfolio review, and Alpaca paper-trading integration
+- Includes mart coverage audit tooling to inspect data completeness before running research
+
+## Architecture
+
+```text
+External APIs
+  SEC / Alpha Vantage / yfinance / Tiingo / FRED
+        |
+        v
+Python ingestion CLI and Airflow DAGs
+        |
+        v
+PostgreSQL raw/meta tables + MinIO object storage
+        |
+        v
+dbt staging and intermediate models
+        |
+        v
+strategy marts, coverage audits, backtest web UI
+```
+
+Core runtime components:
+
+- Python package: `quant_data_platform`
+- CLI entry point: `quant-pipeline`
+- Orchestration: Airflow DAGs under `dags/`
+- Transform layer: dbt project under `dbt/`
+- Web app: `quant_data_platform.web.app`
+- Local infrastructure: `docker-compose.yml`
+
+## Data Sources
+
+- `Alpha Vantage`: listing status and symbol overview data
+- `yfinance`: long-history market backfills, dividends, splits, and corporate-action context
+- `Tiingo`: daily incremental price updates
+- `SEC`: EDGAR submissions and company facts
+- `FRED`: macro and risk-free-rate series
+- `Alpaca`: optional paper-trading dashboard integration
+
+## Requirements
+
+- Docker and Docker Compose
+- Python 3.12 or newer
+- `uv`
+- API credentials for the live data sources you plan to use
+
+Copy the sample environment file and fill in local values:
+
+```bash
+cp .env.example .env
+```
+
+Required or commonly used values:
 
 - `ALPHAVANTAGE_API_KEY`
-  - 발급: <https://www.alphavantage.co/support/#api-key>
 - `TIINGO_API_KEY`
-  - 발급: <https://api.tiingo.com/account/api/token>
-  - 안내: <https://www.tiingo.com/kb/article/where-to-find-your-tiingo-api-token/>
 - `FRED_API_KEY`
-  - 발급: <https://fredaccount.stlouisfed.org/apikeys>
-- `SEC_USER_AGENT`
-  - 예시: `YourName your@email.com`
-  - 참고: <https://www.sec.gov/search-filings/edgar-application-programming-interfaces>
-- `ALPACA_API_KEY`, `ALPACA_SECRET_KEY`
-  - 발급: <https://alpaca.markets/>
-  - 용도: Paper Trading 대시보드 연동
-- `yfinance`
-  - 별도 API 키는 없습니다.
-  - 용도: 장기 history 백필 전용
+- `SEC_USER_AGENT`, for example `Your Name your@email.com`
+- `ALPACA_API_KEY` and `ALPACA_SECRET_KEY`, only for Alpaca paper trading
+- `INFRA_HOST`, defaults to `localhost`
+- `POSTGRES_PORT`, defaults to `55432`
 
-`.env.example`를 복사해 `.env`를 만들고 값을 채웁니다.
+Do not commit `.env` files or real credentials.
 
-## 빠른 시작
-1. `cp .env.example .env`
-2. `.env`에 API 키와 User-Agent를 입력
-3. 필요하면 `.env`의 `INFRA_HOST`만 원하는 infra IP/host로 변경
-4. `docker compose up --build airflow-init`
-5. `docker compose up -d postgres minio pgadmin airflow-webserver airflow-scheduler`
-6. Airflow UI 접속: `http://${INFRA_HOST}:8080`
-7. MinIO API 접속: `http://${INFRA_HOST}:9000`
-8. MinIO Console 접속: `http://${INFRA_HOST}:9001`
-9. pgAdmin 접속: `http://${INFRA_HOST}:5050`
-10. PostgreSQL host 포트: `${INFRA_HOST}:55432`
+## Quick Start
 
-pgAdmin 기본 로그인 값:
+Initialize the local infrastructure:
+
+```bash
+docker compose up --build airflow-init
+docker compose up -d postgres minio pgadmin airflow-webserver airflow-scheduler
+```
+
+Service endpoints with the default `INFRA_HOST=localhost`:
+
+- Airflow: <http://localhost:8080>
+- MinIO API: <http://localhost:9000>
+- MinIO Console: <http://localhost:9001>
+- pgAdmin: <http://localhost:5050>
+- PostgreSQL: `localhost:55432`
+
+The pgAdmin login values come from:
 
 - `PGADMIN_DEFAULT_EMAIL`
 - `PGADMIN_DEFAULT_PASSWORD`
 
-PostgreSQL 서버는 `quant-postgres` 이름으로 자동 등록됩니다.
+The PostgreSQL server is registered in pgAdmin as `quant-postgres`.
 
-## 테스트
-로컬 단위 테스트:
-
-```bash
-uv run pytest
-```
-
-키가 준비된 뒤 live integration 테스트:
+## Main CLI Commands
 
 ```bash
-ALPHAVANTAGE_API_KEY=... TIINGO_API_KEY=... FRED_API_KEY=... SEC_USER_AGENT="YourName your@email.com" uv run pytest -m integration
+uv sync
+uv run quant-pipeline build-universe
+uv run quant-pipeline backfill-market --mode recent
+uv run quant-pipeline backfill-fundamentals --mode full
+uv run quant-pipeline sync-fred --series DGS3MO DGS10
+uv run quant-pipeline daily-incremental
+uv run quant-pipeline audit-mart-coverage --cohort us_liquidity_700_v1
 ```
 
-Docker 구성 검증:
+For JSON audit output:
 
 ```bash
-docker compose config
+uv run quant-pipeline audit-mart-coverage --cohort us_liquidity_700_v1 --format json
 ```
 
-## 백테스트 및 웹 대시보드
-권장 경로는 Docker입니다.
+## Airflow DAGs
 
-Docker로 실행:
-
-```bash
-docker compose up -d postgres backtest-web
-```
-
-- 백테스트: `http://${INFRA_HOST}:8000/backtest`
-- 현재 포트폴리오 (Current Bucket): `http://${INFRA_HOST}:8000/current_bucket`
-- 모의투자 (Alpaca Paper Trading): `http://${INFRA_HOST}:8000/alpaca`
-- readiness: `http://${INFRA_HOST}:8000/healthz`
-
-웹 UI 없이 스크립트로 백테스트를 실행할 때는 다음 명령어를 사용합니다:
-
-```bash
-uv run python run_backtest.py
-```
-
-로컬 `uv run` 또는 외부 infra IP로 실행할 때는 `INFRA_HOST` 하나로 연결 대상을 제어합니다. 기본값은 `localhost`입니다.
-
-```bash
-INFRA_HOST=localhost POSTGRES_PORT=55432 uv run uvicorn quant_data_platform.web.app:app --reload
-```
-
-특정 infra 서버를 바라보려면 예를 들어 다음처럼 실행합니다.
-
-```bash
-INFRA_HOST=192.168.0.10 POSTGRES_PORT=5432 uv run uvicorn quant_data_platform.web.app:app --reload
-```
-
-## 마켓 타이밍 전략
-`mkt_timing_strategy.md`에 기술된 마켓 타이밍(예: 비대칭 이동평균선, 카나리 자산군 신호 등)이 백테스트 엔진에 구현되어 있습니다. 백테스트 시 해당 옵션을 활성화하여 시장 하락기의 수익률 방어 효과를 시뮬레이션할 수 있습니다.
-
-## DAG
 - `backfill_market_data`
 - `backfill_fundamentals`
 - `daily_incremental_pipeline`
 - `build_liquidity_universe`
 
-## 소스 역할
-- `Alpha Vantage`: listing status, symbol overview
-- `yfinance`: 장기 history 백필, 배당, 분할 기반 기업행위
-- `Tiingo`: 일별 incremental 가격 업데이트
-- `SEC`: filings, companyfacts
-- `FRED`: risk-free series
-
-## 현재 권장 운영 방식
-- `build_liquidity_universe`와 `backfill_market_data`는 `yfinance` 기반 장기 history를 사용합니다.
-- `daily_incremental_pipeline`의 시장 데이터 증분은 `Tiingo`를 사용합니다.
-- dbt의 `stg_daily_prices`는 `Tiingo`와 `yfinance_history`가 겹치는 날짜에서 `Tiingo`를 우선합니다.
-
-## dbt 모델
-- `stg_*`: 원천 정규화
-- `int_*`: point-in-time / total-return / universe 중간계층
-- `mart_*`: 전략별 백테스트 입력 마트
-
-## Mart Coverage Audit
-최근 mart coverage를 점검할 때는 아래 명령을 사용합니다.
-
-```bash
-INFRA_HOST=localhost POSTGRES_PORT=55432 uv run python -m quant_data_platform.cli audit-mart-coverage --cohort us_liquidity_700_v1
-```
-
-JSON이 필요하면:
-
-```bash
-INFRA_HOST=localhost POSTGRES_PORT=55432 uv run python -m quant_data_platform.cli audit-mart-coverage --cohort us_liquidity_700_v1 --format json
-```
-
-리포트에는 아래 내용이 포함됩니다.
-
-- `stg/int/mart` row 수, 날짜 범위, distinct entity 수
-- strategy mart의 `cohort` 분포
-- 최신 유니버스 기준 `stable_id_or_cik` 미매핑 / PIT fundamentals 미보유 심볼
-- 최신 `value_quality` factor null profile
-- 최근 월별 fully-eligible symbol 수
-
-## Full-Universe Backfill Runbook
-mart coverage를 실제로 늘릴 때는 아래 순서를 권장합니다.
-
-1. 사전 audit 실행
-2. full-universe fundamentals backfill
-3. full-universe market refresh
-4. universe rebuild
-5. daily/dbt rebuild
-6. 사후 audit 실행
-
-Airflow 경로 예시:
+Typical full-universe refresh sequence:
 
 ```bash
 docker compose exec airflow-webserver airflow dags trigger backfill_fundamentals --conf '{"full_universe": true, "mode": "full"}'
@@ -169,24 +138,88 @@ docker compose exec airflow-webserver airflow dags trigger build_liquidity_unive
 docker compose exec airflow-webserver airflow dags trigger daily_incremental_pipeline
 ```
 
-CLI 경로가 필요할 때는 `--full-universe` 플래그를 사용할 수 있습니다.
+Equivalent CLI path:
 
 ```bash
-INFRA_HOST=localhost POSTGRES_PORT=55432 uv run python -m quant_data_platform.cli backfill-fundamentals --full-universe --mode full
-INFRA_HOST=localhost POSTGRES_PORT=55432 uv run python -m quant_data_platform.cli backfill-market --full-universe --mode recent
+INFRA_HOST=localhost POSTGRES_PORT=55432 uv run quant-pipeline backfill-fundamentals --full-universe --mode full
+INFRA_HOST=localhost POSTGRES_PORT=55432 uv run quant-pipeline backfill-market --full-universe --mode recent
 ```
 
-SPY benchmark 백필/일일 갱신 메모:
+## dbt Models
+
+- `stg_*`: source normalization
+- `int_*`: point-in-time fundamentals, total-return prices, and universe snapshots
+- `mart_*`: strategy-specific backtest input marts
+
+Current mart families include:
+
+- `mart_value_quality_inputs`
+- `mart_value_momentum_inputs`
+- `mart_quality_lowvol_inputs`
+
+`stg_daily_prices` prioritizes Tiingo rows when Tiingo and yfinance overlap on the same date.
+
+## Backtest And Web UI
+
+The recommended web path is Docker:
 
 ```bash
-INFRA_HOST=localhost POSTGRES_PORT=55432 uv run python -m quant_data_platform.cli backfill-market --symbols SPY --mode full
-INFRA_HOST=localhost POSTGRES_PORT=55432 uv run python -m quant_data_platform.cli daily-incremental
+docker compose up -d postgres backtest-web
 ```
 
-- `SUPPORT_MARKET_SYMBOLS` 기본값은 `SPY,VT,IEF,SGOV,JPST,TLT,GLD,XLE`이며, 일반 공통주 유니버스와 별개로 시장 데이터 적재 대상에 항상 병합됩니다.
-- `stg_benchmark_series`의 `SPY`는 `stg_daily_prices`의 최신 종목별 가격 스냅샷 전체를 사용하므로, 부분 recent 갱신 후에도 과거 이력이 유지됩니다.
+Default routes:
 
-주의:
+- Backtest UI: `http://${INFRA_HOST}:8000/backtest`
+- Current bucket: `http://${INFRA_HOST}:8000/current_bucket`
+- Alpaca paper trading: `http://${INFRA_HOST}:8000/alpaca`
+- Health check: `http://${INFRA_HOST}:8000/healthz`
 
-- strategy mart는 여전히 `DBT_UNIVERSE_COHORT` 기준 cohort-clean 데이터를 기본 source로 사용합니다.
-- full-universe backfill은 upstream coverage 확장 목적이며, backtest UI는 cohort-backed marts를 읽습니다.
+Local FastAPI run:
+
+```bash
+INFRA_HOST=localhost POSTGRES_PORT=55432 uv run uvicorn quant_data_platform.web.app:app --reload
+```
+
+Point the app at a remote infrastructure host by changing `INFRA_HOST` and, if needed, `POSTGRES_PORT`.
+
+## Market Timing
+
+The backtest engine includes market timing ideas documented in `references/mkt_timing_strategy.md`, including asymmetric moving-average and canary-asset signals. Use these options to simulate defensive behavior during market drawdowns.
+
+## Testing
+
+Run local tests:
+
+```bash
+uv run pytest
+```
+
+Run live integration tests after credentials are configured:
+
+```bash
+ALPHAVANTAGE_API_KEY=... \
+TIINGO_API_KEY=... \
+FRED_API_KEY=... \
+SEC_USER_AGENT="Your Name your@email.com" \
+uv run pytest -m integration
+```
+
+Validate Docker Compose configuration:
+
+```bash
+docker compose config
+```
+
+## Related Documentation
+
+- [Agent Core](docs/agent-core.md)
+- [Repository Guide](REPO_GUIDE.md)
+- [Quant Strategy Documentation](research_report/quant_strategy_documentation_en.md)
+- [Backtest Data Requirements](research_report/us_equity_backtest_data_requirements_en.md)
+- [Quant Factor Research](research_report/us_equity_quant_factor_research_en.md)
+
+## Public Repository Notes
+
+- `.env`, local data volumes, backups, caches, and generated dbt/Airflow state are ignored.
+- Keep API keys, broker credentials, personal account identifiers, and local database dumps out of commits.
+- Backtest output is research evidence, not a forward-looking performance guarantee.
