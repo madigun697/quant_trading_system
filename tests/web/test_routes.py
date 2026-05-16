@@ -101,6 +101,8 @@ class FakeService:
             context.equity_curve = []
             context.trade_log_summary = []
             context.trade_log_rows = []
+            context.run_id = "bt-test"
+            context.db_save_success_message = "DB에 백테스트 결과를 저장했습니다: bt-test"
         elif self.desired_state == PageState.NO_DATA:
             context.error_message = "선택한 기간과 조건에서 체결 가능한 후보를 찾지 못했습니다."
         elif self.desired_state == PageState.INSUFFICIENT_HISTORY:
@@ -118,6 +120,43 @@ class FakeService:
         else:
             reason = context.error_message or "현재 조건에서는 저장 가능한 결과를 만들지 못했습니다."
             context.save_error_message = f"결과 저장을 완료하지 못했습니다. {reason}"
+        return context
+
+    def recent_runs(self, limit: int = 20):
+        return [
+            {
+                "run_id": "bt-test",
+                "created_at": "2024-04-01 09:30:00+00:00",
+                "start_date": date(2024, 1, 1),
+                "end_date": date(2024, 12, 31),
+                "strategy_preset": "value_quality",
+                "market_timing_overlay": "none",
+                "safe_asset_summary": "SGOV 100%",
+                "initial_capital": 100000,
+                "top_n": 10,
+                "transaction_cost_preset": "conservative",
+                "net_total_return": 0.1,
+                "max_drawdown_net": -0.05,
+                "sharpe": 1.2,
+                "trade_count": 12,
+                "total_fees": 15,
+            }
+        ][:limit]
+
+    def saved_run_context(self, run_id: str) -> BacktestPageContext:
+        context = self.empty_context()
+        context.state = self.desired_state
+        context.run_id = run_id
+        context.run_created_at = "2024-04-01T09:30:00"
+        context.helper_copy = "DB에 저장된 과거 백테스트 실행 결과입니다."
+        if self.desired_state == PageState.SUCCESS:
+            context.summary_metrics = []
+            context.equity_curve = []
+            context.trade_log_summary = []
+            context.trade_log_rows = []
+        else:
+            context.error_message = "요청한 백테스트 실행 결과를 찾지 못했습니다."
+            context.http_status_code = 404
         return context
 
 
@@ -157,8 +196,26 @@ def test_post_valid_form_returns_success(preset_id: str) -> None:
     )
     assert response.status_code == 200
     assert "핵심 성과 요약" in response.text
+    assert "DB 저장 완료" in response.text
+    assert "/backtest/runs/bt-test" in response.text
     assert 'formaction="http://testserver/backtest/save"' in response.text
     assert 'action="http://testserver/backtest"' in response.text
+
+
+def test_saved_backtest_runs_routes_render() -> None:
+    app = create_app(service=FakeService(PageState.SUCCESS))
+    client = TestClient(app)
+
+    runs = client.get("/backtest/runs")
+    assert runs.status_code == 200
+    assert "저장된 백테스트 실행 결과" in runs.text
+    assert "bt-test" in runs.text
+    assert "/backtest/runs/bt-test" in runs.text
+
+    detail = client.get("/backtest/runs/bt-test")
+    assert detail.status_code == 200
+    assert "Backtest Detail" in detail.text
+    assert "bt-test" in detail.text
 
 
 def test_post_invalid_form_returns_error_state() -> None:

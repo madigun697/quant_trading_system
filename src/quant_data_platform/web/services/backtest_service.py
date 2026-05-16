@@ -61,6 +61,10 @@ def _format_decimal(value: Decimal | float | int, digits: int = 2) -> str:
     return f"{amount:,.{digits}f}"
 
 
+def _compact_error_detail(exc: Exception) -> str:
+    return " ".join(str(exc).split())
+
+
 def build_equity_curve_svg(points: list[EquityCurvePoint]) -> str | None:
     if len(points) < 2:
         return None
@@ -236,13 +240,25 @@ class BacktestPageService:
                 form.transaction_cost_preset.value,
                 freshness_token,
             )
-            cached = self._cache.get(cache_key)
-            if cached is not None:
-                return cached
             simulation = self._run_simulation(form)
         except psycopg.Error as exc:
             return self._dependency_error_context(form, self.repository.classify_error(exc, form.strategy_preset))
         context = self._context_from_simulation(form, simulation)
+        if simulation.state == PageState.SUCCESS:
+            try:
+                saved = self.repository.save_simulation_result(
+                    form=form,
+                    context=context,
+                    simulation=simulation,
+                )
+            except psycopg.Error as exc:
+                context.db_save_error_message = f"DB 저장 중 오류가 발생했습니다. {_compact_error_detail(exc)}"
+                context.http_status_code = 500
+                return context
+            context.run_id = str(saved["run_id"])
+            created_at = saved.get("created_at")
+            context.run_created_at = created_at.isoformat(timespec="seconds") if isinstance(created_at, datetime) else str(created_at)
+            context.db_save_success_message = f"DB에 백테스트 결과를 저장했습니다: {context.run_id}"
         self._cache.set(cache_key, context)
         return context
 
@@ -280,6 +296,26 @@ class BacktestPageService:
         context.save_directory = str(saved_directory)
         context.save_success_message = f"백테스트 결과를 저장했습니다: {saved_directory}"
         return context
+
+    def recent_runs(self, limit: int = 20) -> list[dict[str, Any]]:
+        return self.repository.list_recent_runs(limit=limit)
+
+    def saved_run_context(self, run_id: str) -> BacktestPageContext:
+        try:
+            saved_run = self.repository.fetch_saved_run(run_id)
+        except psycopg.Error as exc:
+            return self.error_context(
+                form=None,
+                message=f"저장된 백테스트를 불러오지 못했습니다. {_compact_error_detail(exc)}",
+                http_status_code=503,
+            )
+        if saved_run is None:
+            return self.error_context(
+                form=None,
+                message="요청한 백테스트 실행 결과를 찾지 못했습니다.",
+                http_status_code=404,
+            )
+        return self._context_from_saved_run(saved_run)
 
     def _run_simulation(self, form: BacktestFormInput) -> SimulationResult:
         calendar_start = form.start_date
@@ -499,6 +535,81 @@ class BacktestPageService:
             unavailable_reasons=[],
             benchmark_available=any(point.benchmark_equity is not None for point in equity_points),
             equity_curve_svg=build_equity_curve_svg(equity_points),
+        )
+
+    def _context_from_saved_run(self, saved_run: dict[str, Any]) -> BacktestPageContext:
+        summary = saved_run["summary"]
+        form_values = summary.get("form_values") if isinstance(summary.get("form_values"), dict) else self.empty_context().form_values
+        metrics = summary.get("metrics") if isinstance(summary.get("metrics"), dict) else {}
+        equity_points = [
+            EquityCurvePoint(
+                date=row["equity_date"].isoformat(),
+                gross_equity=float(row["gross_equity"]),
+                net_equity=float(row["net_equity"]),
+                benchmark_equity=float(row["benchmark_equity"]) if row.get("benchmark_equity") is not None else None,
+            )
+            for row in saved_run["equity_curve"]
+        ]
+        summary_rows = [
+            TradeLogSummaryRow(
+                signal_date=row["signal_date"].isoformat(),
+                execution_date=row["execution_date"].isoformat(),
+                selected_count=row["selected_count"],
+                sold_count=row["sold_count"],
+                buy_notional=_format_currency(row["buy_notional"]),
+                sell_notional=_format_currency(row["sell_notional"]),
+                fees=_format_currency(row["fees"]),
+                turnover=_format_percent(row["turnover"]),
+                notes=row.get("notes"),
+            )
+            for row in saved_run["rebalance_rows"]
+        ]
+        detail_rows = [
+            TradeLogDetailRow(
+                execution_date=row["execution_date"].isoformat(),
+                signal_date=row["signal_date"].isoformat(),
+                symbol=row["symbol"],
+                action=row["action"],
+                shares=_format_decimal(row["shares"], 4),
+                execution_price=_format_currency(row["execution_price"]),
+                fees=_format_currency(row["fees"]),
+                net_cash_flow=_format_currency(row["net_cash_flow"]),
+                realized_pnl=_format_currency(row["realized_pnl"]) if row.get("realized_pnl") is not None else None,
+                holding_days=f"{row['holding_days']}일" if row.get("holding_days") is not None else None,
+            )
+            for row in saved_run["fill_rows"]
+        ]
+        warnings = [
+            WarningMessage.model_validate(warning)
+            for warning in summary.get("warnings", [])
+            if isinstance(warning, dict)
+        ]
+        created_at = summary.get("created_at")
+        return BacktestPageContext(
+            state=PageState.SUCCESS,
+            form_values=form_values,
+            preset_options=list_preset_options(),
+            overlay_options=list_overlay_options(),
+            safe_asset_options=list_safe_asset_options(),
+            transaction_cost_options=list_cost_options(),
+            selected_preset_detail=self._selected_preset_detail(str(form_values.get("strategy_preset", summary["strategy_preset"]))),
+            selected_overlay_detail=self._selected_overlay_detail(str(form_values.get("market_timing_overlay", summary["market_timing_overlay"]))),
+            selected_safe_asset_allocations=self._selected_safe_asset_allocations(form_values),
+            selected_safe_asset_summary=summary.get("safe_asset_summary") or self._selected_safe_asset_summary(form_values),
+            selected_cost_detail=self._selected_cost_detail(str(form_values.get("transaction_cost_preset", summary["transaction_cost_preset"]))),
+            summary_metrics=self._build_summary_metrics(metrics),
+            equity_curve=equity_points,
+            trade_log_summary=summary_rows,
+            trade_log_rows=detail_rows,
+            warnings=warnings,
+            data_quality_flags=list(summary.get("data_quality_flags") or []),
+            unavailable_reasons=[],
+            benchmark_available=any(point.benchmark_equity is not None for point in equity_points),
+            equity_curve_svg=build_equity_curve_svg(equity_points),
+            run_id=summary["run_id"],
+            run_created_at=created_at.isoformat(timespec="seconds") if isinstance(created_at, datetime) else str(created_at),
+            page_title=f"백테스트 결과 {summary['run_id']}",
+            helper_copy="DB에 저장된 과거 백테스트 실행 결과입니다.",
         )
 
     def _build_summary_metrics(self, metrics: dict[str, Any]) -> list[SummaryMetric]:

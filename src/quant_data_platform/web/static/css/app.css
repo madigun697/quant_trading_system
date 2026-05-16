@@ -125,6 +125,18 @@ body {
   font-size: 1.05rem;
 }
 
+.hero-link {
+  display: inline-block;
+  margin-top: 12px;
+  color: var(--accent);
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.hero-link:hover {
+  text-decoration: underline;
+}
+
 .workspace-grid {
   display: grid;
   grid-template-columns: minmax(320px, 380px) minmax(0, 1fr);
@@ -882,4 +894,3 @@ th {
   .modal-box { border-radius: 20px; }
   .modal-header, .modal-body, .modal-footer { padding-left: 18px; padding-right: 18px; }
 }
-

@@ -348,6 +348,10 @@ class BacktestPageContext(BaseModel):
     field_errors: dict[str, str] = Field(default_factory=dict)
     benchmark_available: bool = False
     equity_curve_svg: str | None = None
+    run_id: str | None = None
+    run_created_at: str | None = None
+    db_save_success_message: str | None = None
+    db_save_error_message: str | None = None
     save_success_message: str | None = None
     save_error_message: str | None = None
     save_directory: str | None = None

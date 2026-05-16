@@ -169,6 +169,7 @@ docker compose up -d postgres backtest-web
 
 Default routes:
 
+- Airflow UI: `http://${INFRA_HOST}:8080`
 - Backtest UI: `http://${INFRA_HOST}:8000/backtest`
 - Current bucket: `http://${INFRA_HOST}:8000/current_bucket`
 - Alpaca paper trading: `http://${INFRA_HOST}:8000/alpaca`
@@ -181,6 +182,12 @@ INFRA_HOST=localhost POSTGRES_PORT=55432 uv run uvicorn quant_data_platform.web.
 ```
 
 Point the app at a remote infrastructure host by changing `INFRA_HOST` and, if needed, `POSTGRES_PORT`.
+
+```bash
+INFRA_HOST=192.168.0.10 POSTGRES_PORT=5432 uv run uvicorn quant_data_platform.web.app:app --reload
+```
+
+Successful backtest runs are stored in `mart.backtest_*` tables and can be reviewed later at `http://${INFRA_HOST}:8000/backtest/runs`.
 
 ## Market Timing
 

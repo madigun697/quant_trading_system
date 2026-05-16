@@ -39,6 +39,36 @@ def build_router(
         context = service.empty_context()
         return templates.TemplateResponse(request, "backtest/index.html", context.model_dump())
 
+    @router.get("/backtest/runs", response_class=HTMLResponse)
+    async def backtest_runs(request: Request) -> HTMLResponse:
+        service = service_factory(request)
+        ui_warnings: list[str] = []
+        recent_runs = []
+        try:
+            recent_runs = service.recent_runs(limit=20)
+        except Exception as exc:
+            ui_warnings.append(f"저장된 백테스트 목록을 불러오지 못했습니다: {type(exc).__name__}")
+        return templates.TemplateResponse(
+            request,
+            "backtest/runs.html",
+            {
+                "page_title": "저장된 백테스트",
+                "recent_runs": recent_runs,
+                "ui_warnings": ui_warnings,
+            },
+        )
+
+    @router.get("/backtest/runs/{run_id}", response_class=HTMLResponse)
+    async def backtest_run_detail(request: Request, run_id: str) -> HTMLResponse:
+        service = service_factory(request)
+        context = service.saved_run_context(run_id)
+        return templates.TemplateResponse(
+            request,
+            "backtest/run_detail.html",
+            context.model_dump(),
+            status_code=context.http_status_code,
+        )
+
     @router.post("/backtest", response_class=HTMLResponse)
     async def run_backtest(request: Request) -> HTMLResponse:
         service = service_factory(request)

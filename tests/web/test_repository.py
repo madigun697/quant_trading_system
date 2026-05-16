@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timezone
 
 import psycopg
 from quant_data_platform.web.presets import TRANSACTION_COST_BPS, StrategyPresetId, TransactionCostPreset, get_strategy_preset
@@ -72,3 +72,28 @@ def test_transaction_cost_presets_are_stored_as_round_trip_totals() -> None:
     assert TRANSACTION_COST_BPS[TransactionCostPreset.LOW] == 0.0005
     assert TRANSACTION_COST_BPS[TransactionCostPreset.BASE] == 0.00125
     assert TRANSACTION_COST_BPS[TransactionCostPreset.CONSERVATIVE] == 0.0025
+
+
+def test_backtest_result_tables_use_mart_schema() -> None:
+    repo = BacktestRepository()
+    ddl = "\n".join(repo.BACKTEST_RESULT_TABLE_SQL)
+    assert "create table if not exists mart.backtest_run_summary" in ddl
+    assert "create table if not exists mart.backtest_equity_curve" in ddl
+    assert "create table if not exists mart.backtest_rebalance_summary" in ddl
+    assert "create table if not exists mart.backtest_fill_log" in ddl
+    assert "references mart.backtest_run_summary(run_id) on delete cascade" in ddl
+    assert "create table if not exists stg." not in ddl
+    assert "create table if not exists raw." not in ddl
+
+
+def test_saved_run_id_matches_swing_timestamp_format() -> None:
+    run_id = BacktestRepository.generate_run_id(datetime(2024, 4, 1, 9, 30, 0, 123456, tzinfo=timezone.utc))
+    assert run_id == "bt-20240401T093000123456Z"
+
+
+def test_backtest_repository_exposes_result_persistence_methods() -> None:
+    repo = BacktestRepository()
+    assert callable(repo.ensure_backtest_result_tables)
+    assert callable(repo.save_simulation_result)
+    assert callable(repo.list_recent_runs)
+    assert callable(repo.fetch_saved_run)

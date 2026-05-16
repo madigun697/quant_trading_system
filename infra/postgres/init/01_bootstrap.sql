@@ -53,6 +53,84 @@ create table if not exists meta.fred_series_config (
   is_active boolean not null default true
 );
 
+create table if not exists mart.backtest_run_summary (
+  run_id text primary key,
+  created_at timestamptz not null default now(),
+  start_date date not null,
+  end_date date not null,
+  strategy_preset text not null,
+  market_timing_overlay text not null,
+  safe_asset_summary text not null default '',
+  initial_capital numeric not null,
+  top_n integer not null,
+  transaction_cost_preset text not null,
+  final_gross_equity numeric,
+  final_net_equity numeric,
+  final_benchmark_equity numeric,
+  gross_total_return numeric,
+  net_total_return numeric,
+  gross_cagr numeric,
+  net_cagr numeric,
+  max_drawdown_net numeric,
+  sharpe numeric,
+  trade_count integer not null default 0,
+  win_rate numeric,
+  expected_value numeric,
+  turnover numeric,
+  total_fees numeric,
+  average_holding_period numeric,
+  metrics jsonb not null default '{}'::jsonb,
+  form_values jsonb not null default '{}'::jsonb,
+  config jsonb not null default '{}'::jsonb,
+  warnings jsonb not null default '[]'::jsonb,
+  data_quality_flags jsonb not null default '[]'::jsonb
+);
+
+create table if not exists mart.backtest_equity_curve (
+  id bigserial primary key,
+  run_id text not null references mart.backtest_run_summary(run_id) on delete cascade,
+  equity_date date not null,
+  gross_equity numeric not null,
+  net_equity numeric not null,
+  benchmark_equity numeric,
+  details jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now(),
+  unique (run_id, equity_date)
+);
+
+create table if not exists mart.backtest_rebalance_summary (
+  id bigserial primary key,
+  run_id text not null references mart.backtest_run_summary(run_id) on delete cascade,
+  signal_date date not null,
+  execution_date date not null,
+  selected_count integer not null,
+  sold_count integer not null,
+  buy_notional numeric not null,
+  sell_notional numeric not null,
+  fees numeric not null,
+  turnover numeric not null,
+  notes text,
+  details jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists mart.backtest_fill_log (
+  id bigserial primary key,
+  run_id text not null references mart.backtest_run_summary(run_id) on delete cascade,
+  execution_date date not null,
+  signal_date date not null,
+  symbol text not null,
+  action text not null,
+  shares numeric not null,
+  execution_price numeric not null,
+  fees numeric not null,
+  net_cash_flow numeric not null,
+  realized_pnl numeric,
+  holding_days integer,
+  details jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now()
+);
+
 create table if not exists raw.ingestion_artifacts (
   artifact_id bigserial primary key,
   source text not null,

@@ -1,5 +1,24 @@
-{% if save_success_message or save_error_message or warnings or data_quality_flags or error_message %}
+{% if db_save_success_message or db_save_error_message or save_success_message or save_error_message or warnings or data_quality_flags or error_message %}
   <section class="stacked-alerts">
+    {% if db_save_success_message %}
+      <article class="alert alert--success">
+        <strong>DB 저장 완료</strong>
+        <p>
+          {{ db_save_success_message }}
+          {% if run_id %}
+            <a href="{{ request.url_for('backtest_run_detail', run_id=run_id) }}">저장 결과 보기</a>
+          {% endif %}
+        </p>
+      </article>
+    {% endif %}
+
+    {% if db_save_error_message %}
+      <article class="alert alert--danger">
+        <strong>DB 저장 실패</strong>
+        <p>{{ db_save_error_message }}</p>
+      </article>
+    {% endif %}
+
     {% if save_success_message %}
       <article class="alert alert--success">
         <strong>결과 저장 완료</strong>

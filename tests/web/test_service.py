@@ -32,6 +32,8 @@ class FakeRepository:
         self.daily_close_symbols: list[str] = []
         self.raise_on_freshness: Exception | None = None
         self.readiness_preset_id: StrategyPresetId | None = None
+        self.saved_results: list[dict[str, object]] = []
+        self.raise_on_save: Exception | None = None
 
     def check_readiness(self, preset_id: StrategyPresetId | None = None) -> ReadinessStatus:
         self.readiness_preset_id = preset_id
@@ -112,6 +114,26 @@ class FakeRepository:
     def fetch_spy_benchmark_values(self, start_date: date, end_date: date) -> list[BenchmarkValueRow]:
         return [BenchmarkValueRow(date(2024, 2, 1), Decimal("100"))]
 
+    def save_simulation_result(self, *, form, context, simulation, run_id=None, created_at=None):
+        if self.raise_on_save is not None:
+            raise self.raise_on_save
+        payload = {
+            "run_id": run_id or f"bt-test-{len(self.saved_results) + 1}",
+            "created_at": created_at or datetime(2024, 4, 1, 9, 30, len(self.saved_results)),
+            "equity_points_saved": len(simulation.equity_curve),
+            "rebalance_rows_saved": len(simulation.summary_rows),
+            "fill_rows_saved": len(simulation.fill_rows),
+            "summary_saved": 1,
+        }
+        self.saved_results.append(payload)
+        return payload
+
+    def list_recent_runs(self, limit: int = 20):
+        return self.saved_results[:limit]
+
+    def fetch_saved_run(self, run_id: str):
+        return None
+
 
 def test_empty_context_uses_beginner_defaults() -> None:
     service = BacktestPageService(FakeRepository())
@@ -153,7 +175,7 @@ def test_readiness_status_targets_default_preset() -> None:
     assert repo.readiness_preset_id == StrategyPresetId.VALUE_QUALITY
 
 
-def test_build_context_uses_cache_for_same_inputs() -> None:
+def test_build_context_saves_each_successful_run_for_same_inputs() -> None:
     repo = FakeRepository()
     service = BacktestPageService(repo)
     form = BacktestFormInput(
@@ -169,7 +191,9 @@ def test_build_context_uses_cache_for_same_inputs() -> None:
     assert first.state == PageState.SUCCESS
     assert second.state == PageState.SUCCESS
     assert repo.freshness_calls == 2
-    assert first.model_dump() == second.model_dump()
+    assert len(repo.saved_results) == 2
+    assert first.run_id == "bt-test-1"
+    assert second.run_id == "bt-test-2"
     assert first.equity_curve[-1].benchmark_equity is not None
 
 
@@ -293,6 +317,27 @@ def test_build_context_surfaces_query_errors_without_masking_as_unreachable() ->
     assert "데이터베이스 오류가 발생했습니다" in (context.error_message or "")
 
 
+def test_build_context_reports_db_save_failure_after_successful_simulation() -> None:
+    repo = FakeRepository()
+    repo.raise_on_save = psycopg.ProgrammingError("permission denied for relation backtest_run_summary")
+    service = BacktestPageService(repo)
+    form = BacktestFormInput(
+        strategy_preset=StrategyPresetId.VALUE_QUALITY,
+        start_date=date(2024, 1, 1),
+        end_date=date(2024, 2, 1),
+        initial_capital=Decimal("1000"),
+        top_n=10,
+        transaction_cost_preset=TransactionCostPreset.CONSERVATIVE,
+    )
+
+    context = service.build_context(form)
+
+    assert context.state == PageState.SUCCESS
+    assert context.http_status_code == 500
+    assert context.db_save_error_message is not None
+    assert "DB 저장 중 오류가 발생했습니다" in context.db_save_error_message
+
+
 def test_save_context_writes_result_bundle(tmp_path: Path) -> None:
     repo = FakeRepository()
     writer = BacktestResultWriter(tmp_path / "backtest_result")
@@ -397,3 +442,89 @@ def test_save_context_cleans_up_partial_directory_on_write_failure(tmp_path: Pat
     assert context.save_error_message is not None
     assert context.http_status_code == 500
     assert not (tmp_path / "backtest_result" / "20240401_093000").exists()
+
+
+def test_saved_run_context_rehydrates_stored_result() -> None:
+    class SavedRunRepository(FakeRepository):
+        def fetch_saved_run(self, run_id: str):
+            return {
+                "summary": {
+                    "run_id": run_id,
+                    "created_at": datetime(2024, 4, 1, 9, 30, 0),
+                    "start_date": date(2024, 1, 1),
+                    "end_date": date(2024, 2, 1),
+                    "strategy_preset": "value_quality",
+                    "market_timing_overlay": "none",
+                    "safe_asset_summary": "SGOV 100%",
+                    "initial_capital": Decimal("1000"),
+                    "top_n": 10,
+                    "transaction_cost_preset": "conservative",
+                    "metrics": {
+                        "gross_total_return": Decimal("0.01"),
+                        "net_total_return": Decimal("0.009"),
+                        "gross_cagr": Decimal("0.12"),
+                        "net_cagr": Decimal("0.10"),
+                        "max_drawdown_net": Decimal("-0.02"),
+                        "sharpe": 1.5,
+                        "trade_count": 2,
+                        "win_rate": 0.5,
+                        "expected_value": Decimal("5"),
+                        "turnover": Decimal("1.2"),
+                        "total_fees": Decimal("1"),
+                        "average_holding_period": Decimal("3"),
+                    },
+                    "form_values": {
+                        "strategy_preset": "value_quality",
+                        "market_timing_overlay": "none",
+                        **_safe_asset_form_values(),
+                        "safe_asset_weight_shy": "0",
+                        "start_date": "2024-01-01",
+                        "end_date": "2024-02-01",
+                        "initial_capital": "1000",
+                        "top_n": "10",
+                        "transaction_cost_preset": "conservative",
+                    },
+                    "warnings": [{"title": "실전형 결과 기준", "body": "Net first", "tone": "info"}],
+                    "data_quality_flags": ["flag"],
+                },
+                "equity_curve": [
+                    {"equity_date": date(2024, 2, 1), "gross_equity": Decimal("1010"), "net_equity": Decimal("1009"), "benchmark_equity": Decimal("1005")},
+                ],
+                "rebalance_rows": [
+                    {
+                        "signal_date": date(2024, 1, 31),
+                        "execution_date": date(2024, 2, 1),
+                        "selected_count": 1,
+                        "sold_count": 0,
+                        "buy_notional": Decimal("1000"),
+                        "sell_notional": Decimal("0"),
+                        "fees": Decimal("1"),
+                        "turnover": Decimal("1"),
+                        "notes": "month-end risk_on: factor rebalance",
+                    }
+                ],
+                "fill_rows": [
+                    {
+                        "execution_date": date(2024, 2, 1),
+                        "signal_date": date(2024, 1, 31),
+                        "symbol": "AAA",
+                        "action": "BUY",
+                        "shares": Decimal("10"),
+                        "execution_price": Decimal("100"),
+                        "fees": Decimal("1"),
+                        "net_cash_flow": Decimal("-1001"),
+                        "realized_pnl": None,
+                        "holding_days": None,
+                    }
+                ],
+            }
+
+    service = BacktestPageService(SavedRunRepository())
+
+    context = service.saved_run_context("bt-test")
+
+    assert context.state == PageState.SUCCESS
+    assert context.run_id == "bt-test"
+    assert context.summary_metrics[0].key == "gross_total_return"
+    assert context.trade_log_rows[0].symbol == "AAA"
+    assert context.data_quality_flags == ["flag"]

@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+
+{% block content %}
+  <main class="backtest-page">
+    <section class="hero-card">
+      <div class="hero-copy">
+        <p class="eyebrow">Saved Backtests</p>
+        <h1>저장된 백테스트 실행 결과</h1>
+        <p class="hero-description">DB에 저장된 과거 백테스트를 다시 열어 입력값, 성과, 리밸런스와 체결 로그를 확인합니다.</p>
+      </div>
+      <div class="hero-rule">
+        <span>결과 수</span>
+        <strong>{{ recent_runs | length }} runs</strong>
+        <a class="hero-link" href="{{ request.url_for('backtest_page') }}">새 실행</a>
+      </div>
+    </section>
+
+    {% if ui_warnings %}
+      <section class="stacked-alerts">
+        {% for warning in ui_warnings %}
+          <article class="alert alert--danger">
+            <strong>목록 조회 실패</strong>
+            <p>{{ warning }}</p>
+          </article>
+        {% endfor %}
+      </section>
+    {% endif %}
+
+    <section class="panel-card">
+      <div class="panel-header">
+        <h2>Recent Runs</h2>
+        <p>가장 최근 저장된 실행부터 정렬됩니다.</p>
+      </div>
+      {% if recent_runs %}
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Run ID</th>
+                <th>저장 시각</th>
+                <th>기간</th>
+                <th>전략</th>
+                <th>오버레이</th>
+                <th>Top-N</th>
+                <th>Net Return</th>
+                <th>MDD</th>
+                <th>체결</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for run in recent_runs %}
+                <tr>
+                  <td><a href="{{ request.url_for('backtest_run_detail', run_id=run.run_id) }}">{{ run.run_id }}</a></td>
+                  <td>{{ run.created_at }}</td>
+                  <td>{{ run.start_date }} → {{ run.end_date }}</td>
+                  <td>{{ run.strategy_preset }}</td>
+                  <td>{{ run.market_timing_overlay }}</td>
+                  <td>{{ run.top_n }}</td>
+                  <td>{{ "%.2f%%"|format((run.net_total_return or 0) * 100) }}</td>
+                  <td>{{ "%.2f%%"|format((run.max_drawdown_net or 0) * 100) }}</td>
+                  <td>{{ run.trade_count }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <section class="empty-state">
+          <h2>저장된 실행 결과가 없습니다</h2>
+          <p>백테스트를 실행하면 성공한 결과가 자동으로 DB에 저장됩니다.</p>
+        </section>
+      {% endif %}
+    </section>
+  </main>
+{% endblock %}

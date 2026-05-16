@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+
+{% block content %}
+  <main class="backtest-page">
+    <section class="hero-card">
+      <div class="hero-copy">
+        <p class="eyebrow">Backtest Detail</p>
+        <h1>{{ run_id or "저장 결과" }}</h1>
+        <p class="hero-description">
+          {% if run_created_at %}저장 시각 {{ run_created_at }} · {% endif %}
+          {{ helper_copy }}
+        </p>
+      </div>
+      <div class="hero-rule">
+        <span>재확인</span>
+        <strong>{{ form_values.start_date }} → {{ form_values.end_date }}</strong>
+        <a class="hero-link" href="{{ request.url_for('backtest_runs') }}">목록으로</a>
+      </div>
+    </section>
+
+    <section class="result-panel" aria-live="polite">
+      {% include "backtest/_alerts.html" %}
+
+      {% if state in ["error", "no_data", "insufficient_history"] %}
+        <section class="status-state panel-card">
+          <h2>저장된 결과를 표시하지 못했습니다</h2>
+          <p>{{ error_message }}</p>
+        </section>
+      {% else %}
+        {% include "backtest/_kpis.html" %}
+        {% include "backtest/_curve.html" %}
+        {% include "backtest/_trade_log.html" %}
+      {% endif %}
+    </section>
+  </main>
+{% endblock %}
