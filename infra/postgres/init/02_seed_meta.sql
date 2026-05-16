@@ -1,6 +1,7 @@
 insert into meta.fred_series_config (series_id, description, is_active)
 values
-  ('DGS3MO', '3-Month Treasury Constant Maturity Rate', true)
+  ('DGS3MO', '3-Month Treasury Constant Maturity Rate', true),
+  ('VIXCLS', 'CBOE Volatility Index: VIX', true)
 on conflict (series_id) do update
 set description = excluded.description,
     is_active = excluded.is_active;
