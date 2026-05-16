@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import logging
+from quant_data_platform.logger import setup_logger
 from datetime import UTC, date
 
 import pendulum
@@ -20,7 +20,7 @@ from quant_data_platform.storage import postgres_connection
 from quant_data_platform.config import get_settings
 from common import get_default_buffer_cohort, get_default_cohort
 
-logger = logging.getLogger(__name__)
+logger = setup_logger(__name__)
 
 PROJECT_ROOT = "/opt/airflow/project"
 DBT_PROFILES_DIR = "/opt/airflow/project/dbt"

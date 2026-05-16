@@ -7,7 +7,9 @@ from typing import Iterable
 from requests import HTTPError
 from tenacity import RetryError
 
-logger = logging.getLogger(__name__)
+from quant_data_platform.logger import setup_logger
+
+logger = setup_logger(__name__)
 
 from quant_data_platform.clients.alpha_vantage import (
     AlphaVantageClient,
