@@ -127,13 +127,15 @@ def build_daily_incremental_pipeline() -> None:
     dbt_env = {
         "DBT_UNIVERSE_COHORT": cohort_param,
         "DBT_BUFFER_COHORT": buffer_cohort_param,
+        "DBT_TARGET_PATH": '/tmp/dbt-target',
+        "DBT_LOG_PATH": '/tmp/dbt-log'
     }
 
     dbt_staging = BashOperator(
         task_id="dbt_staging",
         bash_command=(
             f"cd {PROJECT_ROOT} && "
-            f"{DBT_BIN} run --project-dir dbt --profiles-dir {DBT_PROFILES_DIR} --select tag:stg tag:int"
+            f"{DBT_BIN} run --project-dir dbt --profiles-dir {DBT_PROFILES_DIR} --select tag:stg tag:int --log-level debug --log-format text"
         ),
         env=dbt_env,
         append_env=True,
@@ -144,7 +146,7 @@ def build_daily_incremental_pipeline() -> None:
         task_id="dbt_marts",
         bash_command=(
             f"cd {PROJECT_ROOT} && "
-            f"{DBT_BIN} run --project-dir dbt --profiles-dir {DBT_PROFILES_DIR} --select tag:mart"
+            f"{DBT_BIN} run --project-dir dbt --profiles-dir {DBT_PROFILES_DIR} --select tag:mart --log-level debug --log-format text"
         ),
         env=dbt_env,
         append_env=True,
