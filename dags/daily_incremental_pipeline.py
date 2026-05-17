@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from quant_data_platform.logger import setup_logger
 from datetime import UTC, date
 
@@ -53,9 +54,9 @@ def notify_failure(context: dict) -> None:
         except Exception:
             logger.exception("Slack 알림 실패")
 
-    from airflow.configuration import conf
-    smtp_host = conf.get("smtp", "smtp_host", fallback="")
-    if smtp_host:
+    smtp_host = os.getenv("AIRFLOW__SMTP__SMTP_HOST")
+    smtp_conn = os.getenv("AIRFLOW_CONN_SMTP_DEFAULT")
+    if smtp_host or smtp_conn:
         try:
             from airflow.utils.email import send_email
             send_email(
@@ -132,9 +133,10 @@ def build_daily_incremental_pipeline() -> None:
         task_id="dbt_staging",
         bash_command=(
             f"cd {PROJECT_ROOT} && "
-            f"{DBT_BIN} run --project-dir dbt --profiles-dir {DBT_PROFILES_DIR} --select tag:stg,tag:int"
+            f"{DBT_BIN} run --project-dir dbt --profiles-dir {DBT_PROFILES_DIR} --select tag:stg tag:int"
         ),
         env=dbt_env,
+        append_env=True,
         on_failure_callback=notify_failure,
     )
 
@@ -145,6 +147,7 @@ def build_daily_incremental_pipeline() -> None:
             f"{DBT_BIN} run --project-dir dbt --profiles-dir {DBT_PROFILES_DIR} --select tag:mart"
         ),
         env=dbt_env,
+        append_env=True,
         on_failure_callback=notify_failure,
     )
 
@@ -155,6 +158,7 @@ def build_daily_incremental_pipeline() -> None:
             f"{DBT_BIN} test --project-dir dbt --profiles-dir {DBT_PROFILES_DIR}"
         ),
         env=dbt_env,
+        append_env=True,
         on_failure_callback=notify_failure,
     )
 
