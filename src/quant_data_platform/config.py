@@ -43,6 +43,7 @@ class Settings(BaseSettings):
     tiingo_discovery_batch_size: int = Field(default=50, alias="TIINGO_DISCOVERY_BATCH_SIZE")
     yfinance_batch_size: int = Field(default=100, alias="YFINANCE_BATCH_SIZE")
     sec_daily_request_budget: int = Field(default=50, alias="SEC_DAILY_REQUEST_BUDGET")
+    alpha_vantage_daily_request_budget: int = Field(default=25, alias="ALPHA_VANTAGE_DAILY_REQUEST_BUDGET")
     support_market_symbols: Annotated[tuple[str, ...], NoDecode] = Field(
         default=("SPY", "VT", "IEF", "SGOV", "JPST", "TLT", "GLD", "XLE", "SHY"),
         alias="SUPPORT_MARKET_SYMBOLS",

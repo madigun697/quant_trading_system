@@ -10,6 +10,7 @@ from quant_data_platform.pipeline import (
     run_daily_incremental,
     run_fundamental_backfill,
     run_market_backfill,
+    run_security_metadata_backfill,
 )
 from quant_data_platform.utils import parse_date
 
@@ -36,6 +37,14 @@ def build_parser() -> argparse.ArgumentParser:
     market.add_argument("--end-date", default=None)
     market.add_argument("--request-budget", type=int, default=None)
     market.add_argument("--reset-cursor", action="store_true")
+
+    security_metadata = subparsers.add_parser("backfill-security-metadata")
+    security_metadata.add_argument("--symbols", nargs="*", default=None)
+    security_metadata.add_argument("--cohort", default=None)
+    security_metadata.add_argument("--full-universe", action="store_true")
+    security_metadata.add_argument("--mode", choices=["full", "chunked"], default="full")
+    security_metadata.add_argument("--request-budget", type=int, default=None)
+    security_metadata.add_argument("--reset-cursor", action="store_true")
 
     fundamentals = subparsers.add_parser("backfill-fundamentals")
     fundamentals.add_argument("--ciks", nargs="*", default=None)
@@ -82,6 +91,15 @@ def main() -> None:
             mode=args.mode,
             start_date=parse_date(args.start_date),
             end_date=parse_date(args.end_date),
+            request_budget=args.request_budget,
+            reset_cursor=args.reset_cursor,
+        )
+    elif args.command == "backfill-security-metadata":
+        result = run_security_metadata_backfill(
+            symbols=args.symbols,
+            cohort=args.cohort,
+            full_universe=args.full_universe,
+            mode=args.mode,
             request_budget=args.request_budget,
             reset_cursor=args.reset_cursor,
         )

@@ -5,6 +5,11 @@ models:
     columns:
       - name: symbol
         tests: [not_null]
+      - name: sector_source
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['alpha_vantage', 'sec_sic', 'missing']
 
   - name: stg_daily_prices
     columns:

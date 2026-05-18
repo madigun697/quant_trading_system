@@ -836,6 +836,84 @@ def run_market_backfill(
     return {"listing_rows": listing_rows, "full_universe": int(full_universe), **price_stats, "symbol_count": len(symbols)}
 
 
+def run_security_metadata_backfill(
+    *,
+    symbols: list[str] | None = None,
+    cohort: str | None = None,
+    full_universe: bool = False,
+    mode: str = "full",
+    request_budget: int | None = None,
+    reset_cursor: bool = False,
+    settings: Settings | None = None,
+) -> dict[str, int]:
+    settings = settings or get_settings()
+    cohort = cohort or settings.default_cohort
+    explicit_symbols = symbols is not None
+    with postgres_connection(settings) as conn:
+        if symbols is None:
+            if full_universe:
+                symbols = _resolve_full_universe_symbols(conn)
+            else:
+                symbols = fetch_ranked_universe_symbols(conn, cohort) or fetch_universe_symbols(
+                    conn,
+                    cohort,
+                )
+    if explicit_symbols:
+        symbols = _normalize_symbols(symbols or [])
+    else:
+        symbols = _merge_support_market_symbols(symbols or [], settings)
+
+    sec_reference = ingest_sec_ticker_reference(settings=settings)
+    if mode == "chunked":
+        request_budget = request_budget or settings.alpha_vantage_daily_request_budget
+        resource_name = (
+            "alpha_vantage_overview:full_universe"
+            if full_universe
+            else f"alpha_vantage_overview:{cohort}"
+        )
+        with postgres_connection(settings) as conn:
+            offset = (
+                0
+                if reset_cursor
+                else int(
+                    get_ingestion_watermark(
+                        conn,
+                        source_name="alpha_vantage",
+                        resource_name=resource_name,
+                    )
+                    or "0"
+                )
+            )
+            chunk_symbols = symbols[offset : offset + request_budget]
+        overview_stats = ingest_alpha_vantage_overviews(chunk_symbols, settings=settings)
+        next_offset = offset + len(chunk_symbols)
+        with postgres_connection(settings) as conn:
+            upsert_ingestion_watermark(
+                conn,
+                source_name="alpha_vantage",
+                resource_name=resource_name,
+                cursor_value=str(next_offset),
+            )
+            conn.commit()
+        return {
+            **sec_reference,
+            "processed_offset_start": offset,
+            "processed_offset_end": next_offset,
+            "remaining_symbols": max(len(symbols) - next_offset, 0),
+            "full_universe": int(full_universe),
+            **overview_stats,
+            "symbol_count": len(chunk_symbols),
+        }
+
+    overview_stats = ingest_alpha_vantage_overviews(symbols, settings=settings)
+    return {
+        **sec_reference,
+        "full_universe": int(full_universe),
+        **overview_stats,
+        "symbol_count": len(symbols),
+    }
+
+
 def run_fundamental_backfill(
     *,
     ciks: list[str] | None = None,
@@ -906,6 +984,12 @@ def run_daily_incremental(*, cohort: str | None = None, settings: Settings | Non
     with postgres_connection(settings) as conn:
         fred_series = fetch_active_fred_series(conn)
     market_stats = run_market_backfill(cohort=cohort, mode="recent", end_date=date.today(), settings=settings)
+    security_metadata_stats = run_security_metadata_backfill(
+        cohort=cohort,
+        mode="chunked",
+        request_budget=settings.alpha_vantage_daily_request_budget,
+        settings=settings,
+    )
     snapshot_stats = refresh_monthly_universe_snapshots(cohort=cohort, settings=settings)
     fundamentals_stats = run_fundamental_backfill(
         cohort=cohort,
@@ -916,6 +1000,7 @@ def run_daily_incremental(*, cohort: str | None = None, settings: Settings | Non
     )
     return {
         "market": market_stats,
+        "security_metadata": security_metadata_stats,
         "snapshots": snapshot_stats,
         "fundamentals": {
             **sec_reference,

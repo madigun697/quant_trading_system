@@ -13,6 +13,7 @@ from quant_data_platform.pipeline import (
     run_daily_incremental,
     run_fundamental_backfill,
     run_market_backfill,
+    run_security_metadata_backfill,
 )
 
 
@@ -144,6 +145,7 @@ def test_ingest_sec_ciks_skips_companyfacts_404(monkeypatch) -> None:
 
 def test_run_daily_incremental_uses_chunked_sec_budget(monkeypatch) -> None:
     calls: dict[str, object] = {}
+    security_metadata_calls: dict[str, object] = {}
 
     monkeypatch.setattr("quant_data_platform.pipeline.postgres_connection", _fake_postgres_connection)
     monkeypatch.setattr("quant_data_platform.pipeline.ingest_sec_ticker_reference", lambda settings=None: {"reference_rows": 10})
@@ -156,6 +158,10 @@ def test_run_daily_incremental_uses_chunked_sec_budget(monkeypatch) -> None:
         "quant_data_platform.pipeline.refresh_monthly_universe_snapshots",
         lambda cohort=None, settings=None: {"snapshot_rows": 700},
     )
+    monkeypatch.setattr(
+        "quant_data_platform.pipeline.run_security_metadata_backfill",
+        lambda **kwargs: security_metadata_calls.update(kwargs) or {"overview_rows": 12, "remaining_symbols": 88},
+    )
 
     def _fake_run_fundamental_backfill(**kwargs):
         calls.update(kwargs)
@@ -164,15 +170,80 @@ def test_run_daily_incremental_uses_chunked_sec_budget(monkeypatch) -> None:
     monkeypatch.setattr("quant_data_platform.pipeline.run_fundamental_backfill", _fake_run_fundamental_backfill)
     monkeypatch.setattr("quant_data_platform.pipeline.ingest_fred_series", lambda series, settings=None: {"rows": len(series)})
 
-    settings = Settings(SEC_DAILY_REQUEST_BUDGET=50)
+    settings = Settings(SEC_DAILY_REQUEST_BUDGET=50, ALPHA_VANTAGE_DAILY_REQUEST_BUDGET=12)
     result = run_daily_incremental(cohort="us_liquidity_700_v1", settings=settings)
 
     assert calls["cohort"] == "us_liquidity_700_v1"
     assert calls["mode"] == "chunked"
     assert calls["request_budget"] == 50
+    assert security_metadata_calls["cohort"] == "us_liquidity_700_v1"
+    assert security_metadata_calls["mode"] == "chunked"
+    assert security_metadata_calls["request_budget"] == 12
     assert result["fundamentals"]["cik_count"] == 50
     assert result["market"]["price_rows"] == 100
+    assert result["security_metadata"]["overview_rows"] == 12
     assert result["snapshots"]["snapshot_rows"] == 700
+
+
+def test_run_security_metadata_backfill_chunked_uses_watermark(monkeypatch) -> None:
+    watermark_updates: list[tuple[str, str, str | None]] = []
+
+    monkeypatch.setattr("quant_data_platform.pipeline.postgres_connection", _fake_postgres_connection)
+    monkeypatch.setattr("quant_data_platform.pipeline.ingest_sec_ticker_reference", lambda settings=None: {"reference_rows": 10})
+    monkeypatch.setattr(
+        "quant_data_platform.pipeline.fetch_ranked_universe_symbols",
+        lambda conn, cohort, limit=None: ["AAPL", "MSFT", "NVDA", "META"],
+    )
+    monkeypatch.setattr(
+        "quant_data_platform.pipeline.get_ingestion_watermark",
+        lambda conn, source_name, resource_name: "1",
+    )
+    monkeypatch.setattr(
+        "quant_data_platform.pipeline.upsert_ingestion_watermark",
+        lambda conn, source_name, resource_name, cursor_value: watermark_updates.append(
+            (source_name, resource_name, cursor_value)
+        ),
+    )
+    monkeypatch.setattr(
+        "quant_data_platform.pipeline.ingest_alpha_vantage_overviews",
+        lambda symbols, settings=None: {"overview_rows": len(list(symbols)), "overview_skipped": 0},
+    )
+
+    result = run_security_metadata_backfill(
+        cohort="us_liquidity_700_v1",
+        mode="chunked",
+        request_budget=2,
+        settings=Settings(SUPPORT_MARKET_SYMBOLS="SPY"),
+    )
+
+    assert result["reference_rows"] == 10
+    assert result["symbol_count"] == 2
+    assert result["processed_offset_start"] == 1
+    assert result["processed_offset_end"] == 3
+    assert result["remaining_symbols"] == 2
+    assert result["overview_rows"] == 2
+    assert watermark_updates == [("alpha_vantage", "alpha_vantage_overview:us_liquidity_700_v1", "3")]
+
+
+def test_run_security_metadata_backfill_preserves_explicit_symbols_without_support_merge(monkeypatch) -> None:
+    captured: list[str] = []
+
+    monkeypatch.setattr("quant_data_platform.pipeline.postgres_connection", _fake_postgres_connection)
+    monkeypatch.setattr("quant_data_platform.pipeline.ingest_sec_ticker_reference", lambda settings=None: {"reference_rows": 10})
+    monkeypatch.setattr(
+        "quant_data_platform.pipeline.ingest_alpha_vantage_overviews",
+        lambda symbols, settings=None: captured.extend(symbols) or {"overview_rows": len(captured), "overview_skipped": 0},
+    )
+
+    result = run_security_metadata_backfill(
+        symbols=["spy", "AAPL", "SPY"],
+        mode="full",
+        settings=Settings(SUPPORT_MARKET_SYMBOLS="SPY,QQQ"),
+    )
+
+    assert captured == ["SPY", "AAPL"]
+    assert result["symbol_count"] == 2
+    assert result["overview_rows"] == 2
 
 
 def test_run_market_backfill_recent_uses_batched_tiingo(monkeypatch) -> None:

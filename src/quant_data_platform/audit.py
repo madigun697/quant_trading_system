@@ -169,6 +169,50 @@ def build_mart_coverage_report(
 
         cur.execute(
             """
+            with active_universe as (
+                select distinct symbol
+                from meta.universe_members
+                where cohort = %(cohort)s
+                  and is_active = true
+            ),
+            latest_security_master as (
+                select distinct on (symbol)
+                    symbol,
+                    sector,
+                    sector_source
+                from stg.stg_security_master
+                order by symbol, as_of_date desc nulls last, effective_as_of desc nulls last
+            ),
+            latest_overview as (
+                select
+                    count(*) as overview_rows,
+                    count(distinct symbol) as overview_symbols
+                from raw.alpha_vantage_overview
+                where as_of_date = (select max(as_of_date) from raw.alpha_vantage_overview)
+            )
+            select
+                count(*) as universe_symbols,
+                count(*) filter (where sm.sector is not null) as covered_sector_symbols,
+                count(*) filter (where sm.sector_source = 'alpha_vantage') as alpha_vantage_sector_symbols,
+                count(*) filter (where sm.sector_source = 'sec_sic') as sec_sic_sector_symbols,
+                count(*) filter (where coalesce(sm.sector_source, 'missing') = 'missing') as missing_sector_symbols,
+                round(
+                    count(*) filter (where sm.sector is not null)::numeric
+                    / nullif(count(*), 0),
+                    4
+                ) as sector_coverage_ratio,
+                latest_overview.overview_rows,
+                latest_overview.overview_symbols
+            from active_universe u
+            left join latest_security_master sm using (symbol)
+            cross join latest_overview
+            """,
+            {"cohort": cohort},
+        )
+        security_metadata_coverage = dict(cur.fetchone())
+
+        cur.execute(
+            """
             with monthly as (
                 select
                     'value_quality'::text as mart,
@@ -248,6 +292,7 @@ def build_mart_coverage_report(
         "universe_mapping": _normalize(universe_mapping),
         "missing_symbol_diagnostics": _normalize(missing_symbol_diagnostics),
         "latest_quality_nulls": _normalize(latest_quality_nulls),
+        "security_metadata_coverage": _normalize(security_metadata_coverage),
         "monthly_eligibility": _normalize(monthly_eligibility),
     }
 
@@ -270,6 +315,10 @@ def render_mart_coverage_report(report: dict[str, Any]) -> str:
     lines.append("Universe mapping")
     for row in report["universe_mapping"]:
         lines.append(f"- {row['status']}: symbols={row['symbols']}")
+    lines.append("")
+    lines.append("Security metadata coverage")
+    for key, value in report["security_metadata_coverage"].items():
+        lines.append(f"- {key}: {value}")
     if report["missing_symbol_diagnostics"]:
         lines.append("")
         lines.append("Missing symbol diagnostics")
