@@ -14,7 +14,12 @@ latest_sec_reference as (
     from {{ source('raw', 'sec_ticker_reference') }}
 ),
 latest_sec_submission as (
-    select *,
+    select
+        *,
+        case
+            when sic ~ '^[0-9]+$' then sic::integer
+            else null
+        end as sic_code,
         row_number() over (partition by cik order by fetched_at desc) as rn
     from {{ source('raw', 'sec_submissions') }}
 ),
@@ -32,19 +37,19 @@ security_classification as (
         o.shares_outstanding,
         o.as_of_date,
         coalesce(o.sector, case
-            when sec.sic between 1311 and 1389 then 'ENERGY'
-            when sec.sic between 1000 and 1499 then 'MATERIALS'
-            when sec.sic between 2833 and 2836 then 'HEALTHCARE'
-            when sec.sic between 3570 and 3579 then 'TECHNOLOGY'
-            when sec.sic between 3661 and 3699 then 'TECHNOLOGY'
-            when sec.sic between 4812 and 4899 then 'COMMUNICATION SERVICES'
-            when sec.sic between 4900 and 4999 then 'UTILITIES'
-            when sec.sic between 5200 and 5999 then 'CONSUMER CYCLICAL'
-            when sec.sic between 6000 and 6499 then 'FINANCIAL SERVICES'
-            when sec.sic between 6500 and 6799 then 'REAL ESTATE'
-            when sec.sic between 7000 and 7399 then 'TECHNOLOGY'
-            when sec.sic between 7800 and 7999 then 'COMMUNICATION SERVICES'
-            when sec.sic between 8000 and 8999 then 'HEALTHCARE'
+            when sec.sic_code between 1311 and 1389 then 'ENERGY'
+            when sec.sic_code between 1000 and 1499 then 'MATERIALS'
+            when sec.sic_code between 2833 and 2836 then 'HEALTHCARE'
+            when sec.sic_code between 3570 and 3579 then 'TECHNOLOGY'
+            when sec.sic_code between 3661 and 3699 then 'TECHNOLOGY'
+            when sec.sic_code between 4812 and 4899 then 'COMMUNICATION SERVICES'
+            when sec.sic_code between 4900 and 4999 then 'UTILITIES'
+            when sec.sic_code between 5200 and 5999 then 'CONSUMER CYCLICAL'
+            when sec.sic_code between 6000 and 6499 then 'FINANCIAL SERVICES'
+            when sec.sic_code between 6500 and 6799 then 'REAL ESTATE'
+            when sec.sic_code between 7000 and 7399 then 'TECHNOLOGY'
+            when sec.sic_code between 7800 and 7999 then 'COMMUNICATION SERVICES'
+            when sec.sic_code between 8000 and 8999 then 'HEALTHCARE'
             when upper(coalesce(sec.sic_description, '')) like any (array[
                 '%BANK%',
                 '%BROKER%',
